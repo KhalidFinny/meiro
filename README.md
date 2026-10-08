@@ -28,6 +28,11 @@ Enter to do the same from the keyboard. **Play** in a page's heading plays
 everything on it. The player bar below the pages has the transport, a
 scrubber, and the volume.
 
+Every page that lists items draws them in the layout the heading's picker
+chooses: **Rows**, denser **Compact** rows, **Columns**, a **Grid** of
+cards, or a **Split** list beside a pane describing the item you are on.
+The choice applies to every page.
+
 | Keys | What they do |
 | --- | --- |
 | Space | Play or pause |

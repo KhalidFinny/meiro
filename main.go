@@ -47,6 +47,10 @@ type app struct {
 	playable []youtube.MusicItem
 	list     ui.ListState
 	selected int
+	// layout is how the list draws its rows, and gridWidth the room the
+	// cards of the grid layout had in the last frame; see layouts.go.
+	layout    int
+	gridWidth float32
 	// detail is the heading of the album, playlist or artist page shown,
 	// and details remembers one for each page the user opened, so going
 	// back to one finds its heading again.
@@ -275,6 +279,8 @@ func monoTheme(c *ui.Context) {
 		t.Focus = ui.RGBA(10, 10, 10, 0.4)
 		t.Scrollbar = ui.RGBA(0, 0, 0, 0.28)
 	}
-	t.Radius = 8
+	// Square corners everywhere: nothing in the interface has a rounded
+	// border.
+	t.Radius = 0
 	c.SetTheme(&t)
 }

@@ -182,7 +182,7 @@ func (a *app) playerBar(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).Height(74).Padding(10, 16).Gap(14).AlignItems(ui.Center).
 		Background(t.Background).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
-		ui.Image(c, a.thumbs.bitmap(a.current.Thumbnail, 96)).Size(46, 46).Fit(ui.Cover).Radius(6).Background(t.Surface).Shrink(0)
+		ui.Image(c, a.thumbs.bitmap(a.current.Thumbnail, 96)).Size(46, 46).Fit(ui.Cover).Background(t.Surface).Shrink(0)
 		ui.Column(c).Width(200).Shrink(0).Gap(2).Children(func() {
 			ui.Text(c, a.current.Title).SingleLine()
 			line, color := a.current.Subtitle, t.TextMuted
@@ -246,13 +246,13 @@ func playPauseTip(a *app) string {
 
 // transportButton shows one of the player's controls as an icon button.
 func transportButton(c *ui.Context, label, tip string, shape *ui.SVG, primary bool) bool {
-	var button *ui.Element
+	var button ui.Element
 	if primary {
 		button = ui.PrimaryButton(c, "")
 	} else {
 		button = ui.Button(c, "")
 	}
-	button.Label(label).Tooltip(tip).Radius(999).Padding(8)
+	button.Label(label).Tooltip(tip).Padding(8)
 	button.Children(func() { ui.Icon(c, shape).FontSize(15) })
 	return button.Clicked()
 }

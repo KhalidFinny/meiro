@@ -111,7 +111,7 @@ func (a *app) signInModal(c *ui.Context) {
 	}
 	t := c.Theme()
 	ui.Modal(c, &a.signIn.open, func() {
-		ui.Column(c).Width(420).Gap(14).Padding(24).Radius(14).
+		ui.Column(c).Width(420).Gap(14).Padding(24).
 			Background(t.Background).Border(1, t.Border).Children(func() {
 			ui.Text(c, "Sign in to YouTube Music").FontSize(18).Bold()
 			if a.signIn.code.UserCode == "" {
@@ -156,7 +156,7 @@ func (a *app) accountPanel(c *ui.Context) {
 				name = "Signed in"
 			}
 			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Image(c, a.thumbs.bitmap(a.account.Thumbnail, 64)).Size(30, 30).Fit(ui.Cover).Radius(15).Background(t.SurfaceHover)
+				ui.Image(c, a.thumbs.bitmap(a.account.Thumbnail, 64)).Size(30, 30).Fit(ui.Cover).Background(t.SurfaceHover)
 				ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
 					ui.Text(c, name).SingleLine().FontSize(12).Bold()
 					if a.account.Email != "" {

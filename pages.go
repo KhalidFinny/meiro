@@ -358,6 +358,7 @@ func (a *app) searchPage(c *ui.Context) {
 				if ui.Select(c, &a.search.kind, searchKindNames).Label("Type").Width(150).Changed() {
 					a.loadSearch()
 				}
+				a.layoutPicker(c)
 			})
 		})
 		// Typing runs the search once it pauses, not on every keystroke.
@@ -378,7 +379,7 @@ func (a *app) heading(c *ui.Context, fallback string) {
 	}
 	ui.Row(c).Gap(16).Padding(20, 24, 12).AlignItems(ui.Center).Children(func() {
 		if art != "" {
-			ui.Image(c, a.thumbs.bitmap(art, 160)).Size(88, 88).Fit(ui.Cover).Radius(10).Background(t.Surface).Shrink(0)
+			ui.Image(c, a.thumbs.bitmap(art, 160)).Size(88, 88).Fit(ui.Cover).Background(t.Surface).Shrink(0)
 		}
 		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
 			ui.Text(c, title).FontSize(26).Bold().SingleLine()
@@ -386,15 +387,11 @@ func (a *app) heading(c *ui.Context, fallback string) {
 				ui.Text(c, subtitle).TextColor(t.TextMuted).SingleLine()
 			}
 		})
+		a.layoutPicker(c)
 		if len(a.playable) == 0 {
 			return
 		}
-		play := ui.PrimaryButton(c, "").Label("Play")
-		play.Children(func() {
-			ui.Icon(c, playIcon).FontSize(13)
-			ui.Text(c, "Play").SingleLine()
-		})
-		if play.Clicked() {
+		if playButton(c, "Play").Clicked() {
 			a.playAll()
 		}
 	})
@@ -416,31 +413,6 @@ func (a *app) body(c *ui.Context) {
 		a.centered(c, "Nothing here yet", "", "", nil)
 	default:
 		a.listView(c)
-	}
-}
-
-// listView shows the page's rows. A row is chosen by a click or the arrow
-// keys, and opened by a double click or Enter.
-func (a *app) listView(c *ui.Context) {
-	if a.selected >= len(a.rows) {
-		a.selected = -1
-	}
-	a.list.Key = func(i int) any { return a.rows[i].key() }
-	a.list.Label = func(i int) string { return a.rows[i].title }
-	a.list.Header = func(i int) bool { return a.rows[i].header }
-	a.list.Selected = &a.selected
-	list := ui.List(c, &a.list, len(a.rows), func(i int) {
-		switch r := a.rows[i]; {
-		case r.header:
-			a.sectionHeading(c, r.title)
-		case r.more:
-			a.moreRow(c)
-		default:
-			a.itemRow(c, r)
-		}
-	}).Grow(1).Padding(0, 12, 16)
-	if list.Submitted() && a.selected >= 0 {
-		a.activate(a.rows[a.selected])
 	}
 }
 
@@ -476,37 +448,6 @@ func (a *app) appendRow(item youtube.MusicItem) {
 		a.playable = append(a.playable, item)
 	}
 	a.rows = append(a.rows, row{title: item.Title, item: item, track: track})
-}
-
-func (a *app) itemRow(c *ui.Context, r row) {
-	t := c.Theme()
-	line := ui.Row(c).Gap(12).Padding(7, 12).Radius(8).AlignItems(ui.Center)
-	if line.Hovered() {
-		line.Background(t.SurfaceHover)
-	}
-	if line.Clicked() {
-		a.activate(r)
-	}
-	line.Children(func() {
-		// A song on an album or playlist page carries no artwork of its
-		// own; its place in the list is more use than an empty square.
-		if r.item.Thumbnail == "" {
-			ui.Text(c, trackNumber(r)).Width(38).TextAlign(ui.End).FontSize(12).
-				TextColor(t.TextMuted).Shrink(0)
-		} else {
-			ui.Image(c, a.thumbs.bitmap(r.item.Thumbnail, 96)).Size(38, 38).Fit(ui.Cover).
-				Radius(6).Background(t.Surface).Shrink(0)
-		}
-		ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
-			ui.Text(c, r.item.Title).SingleLine()
-			if r.item.Subtitle != "" {
-				ui.Text(c, r.item.Subtitle).SingleLine().FontSize(12).TextColor(t.TextMuted)
-			}
-		})
-		if r.item.Duration != "" {
-			ui.Text(c, r.item.Duration).FontSize(12).TextColor(t.TextMuted).Shrink(0)
-		}
-	})
 }
 
 // trackNumber is the place an item holds among the page's songs, and "" for

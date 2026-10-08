@@ -125,6 +125,20 @@ func TestPlayerBarShowsTheCurrentTrack(t *testing.T) {
 	}
 }
 
+func TestEveryLayoutShowsThePage(t *testing.T) {
+	for layout := range layoutNames {
+		name := layoutNames[layout]
+		t.Run(name, func(t *testing.T) {
+			a := newTestApp()
+			a.layout = layout
+			tt := ui.NewTester(a.view, 1000, 700)
+			if !tt.HasText("Ambient One") || !tt.HasText("Deep Focus") {
+				t.Fatalf("the %s layout does not show the page: %q", name, tt.Texts())
+			}
+		})
+	}
+}
+
 func TestTargetOfRoutesItemsToPages(t *testing.T) {
 	cases := []struct {
 		name string

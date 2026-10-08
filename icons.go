@@ -25,4 +25,12 @@ var (
 	previousIcon = solidIcon(`<path d="M18 4.2v15.6L8 12z"/><path d="M4 4h2.6v16H4z"/>`)
 	volumeIcon   = solidIcon(`<path d="M11 4.5 6 8.5H3v7h3l5 4z"/>`)
 	backIcon     = icon(`<path d="M15 5l-7 7 7 7"/>`)
+
+	// The list layouts: rows, compact rows, columns, a grid of cards, and
+	// a list beside a pane.
+	rowsIcon    = icon(`<path d="M4 6h16M4 12h16M4 18h16"/>`)
+	compactIcon = icon(`<path d="M4 6h16M4 9.5h16M4 13h16M4 16.5h16M4 20h16"/>`)
+	columnsIcon = icon(`<path d="M4 5h16v14H4z"/><path d="M9.5 5v14M15 5v14"/>`)
+	gridIcon    = icon(`<path d="M4 5h7v6.5H4zM13 5h7v6.5h-7zM4 13.5h7v5.5H4zM13 13.5h7v5.5h-7z"/>`)
+	splitIcon   = icon(`<path d="M4 5h16v14H4z"/><path d="M14.5 5v14"/>`)
 )

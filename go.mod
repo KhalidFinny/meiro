@@ -7,7 +7,7 @@ tool github.com/egoist/mygo/cmd/mygo
 require (
 	github.com/dop251/goja v0.0.0-20261007200356-e2ea74d3d210
 	github.com/ebitengine/oto/v3 v3.5.1
-	github.com/egoist/mygo v0.2.18
+	github.com/egoist/mygo v0.3.3
 )
 
 require (
