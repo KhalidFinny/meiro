@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestThumbCacheRetriesAfterFailure(t *testing.T) {
@@ -94,4 +96,35 @@ func waitFor(t *testing.T, ok func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out")
+}
+
+func TestThumbCacheDropsTheBitmapDrawnLeastRecently(t *testing.T) {
+	cache := newThumbCache(func() {})
+	cover := func(n string) string { return "https://covers.example/" + n + "=w320-h320" }
+	size := thumbBudget/3 + 1
+	for _, name := range []string{"a", "b", "c"} {
+		cache.mu.Lock()
+		cache.store(cover(name), &thumb{bitmap: &ui.Bitmap{}, bytes: size})
+		cache.mu.Unlock()
+		if name == "b" {
+			// a is drawn again, so b is the one that has gone unseen longest.
+			cache.mu.Lock()
+			cache.touch(cache.bitmaps[cover("a")])
+			cache.mu.Unlock()
+		}
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if _, ok := cache.bitmaps[cover("b")]; ok {
+		t.Error("b was kept although it was drawn least recently")
+	}
+	if _, ok := cache.bitmaps[cover("a")]; !ok {
+		t.Error("a was dropped although it was drawn again")
+	}
+	if _, ok := cache.bitmaps[cover("c")]; !ok {
+		t.Error("c was dropped on landing")
+	}
+	if cache.held != 2*size || len(cache.sizes) != 2 {
+		t.Errorf("held = %d (want %d), sizes = %d (want 2)", cache.held, 2*size, len(cache.sizes))
+	}
 }

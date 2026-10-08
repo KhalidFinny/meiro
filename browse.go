@@ -195,7 +195,7 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 	card.Children(func() {
 		radius := artRadius(item, m3.LargeIncreased)
 		opening := a.opening == itemKey("open", item)
-		m3.Art(c, a.thumbs.bitmap(item.Thumbnail, 360), cardArt, radius, func() {
+		m3.Art(c, a.thumbs.bitmap(item.Thumbnail, 320), cardArt, radius, func() {
 			if opening {
 				ui.Box(c).Size(40, 40).Radius(m3.Full).Center().Background(sc.PrimaryContainer).
 					Attach(ui.AnchorBottomRight, ui.AnchorBottomRight).Right(8).Bottom(8).Children(func() {

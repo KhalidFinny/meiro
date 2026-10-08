@@ -19,10 +19,12 @@ import (
 	"github.com/elianiva/meiro/m3"
 )
 
-// thumbLimit is how many bitmaps the cache keeps before dropping the ones it
-// loaded first. MyGo holds a bitmap on the GPU as long as the app uses it,
-// so the cache must not grow without end while the user browses.
-const thumbLimit = 400
+// thumbBudget is how many bytes of pixels the cache keeps before dropping the
+// bitmaps that went longest without being drawn. MyGo holds a bitmap on the
+// GPU as long as the app uses it, so the cache must not grow without end
+// while the user browses. It counts bytes, not bitmaps, because a cover is
+// tens of kilobytes at one size and over a megabyte at another.
+const thumbBudget = 48 << 20
 
 // thumbRetry is how long a failed download waits before the next try.
 const thumbRetry = 10 * time.Second
@@ -36,9 +38,11 @@ type thumbCache struct {
 	synth func(url string, size int) *ui.Bitmap
 
 	mu      sync.Mutex
-	bitmaps map[string]*ui.Bitmap
-	colours map[string]ui.Color
-	order   []string
+	bitmaps map[string]*thumb
+	// held is the bytes the bitmaps take, and tick counts the draws that
+	// asked for one, so each bitmap can say when it was last drawn.
+	held    int
+	tick    uint64
 	pending map[string]bool
 	// failed holds when each download last failed. A failure is only held
 	// for thumbRetry, so a dropped connection does not leave a cover blank
@@ -50,14 +54,30 @@ type thumbCache struct {
 	sizes map[string][]string
 }
 
+// thumb is one cached bitmap, the colour taken from it, and what it costs.
+type thumb struct {
+	bitmap    *ui.Bitmap
+	colour    ui.Color
+	hasColour bool
+	bytes     int
+	used      uint64
+}
+
+// thumbBytes estimates the memory a bitmap takes: its pixels, and the
+// smaller copies MyGo makes of them for drawing it small, which add up to a
+// third more.
+func thumbBytes(b *ui.Bitmap) int {
+	w, h := b.Size()
+	return w * h * 4 * 4 / 3
+}
+
 // newThumbCache returns a cache that calls notify when a bitmap lands, so
 // the window draws it.
 func newThumbCache(notify func()) *thumbCache {
 	return &thumbCache{
 		client:  &http.Client{Timeout: 30 * time.Second},
 		notify:  notify,
-		bitmaps: make(map[string]*ui.Bitmap),
-		colours: make(map[string]ui.Color),
+		bitmaps: make(map[string]*thumb),
 		pending: make(map[string]bool),
 		failed:  make(map[string]time.Time),
 		sizes:   make(map[string][]string),
@@ -77,8 +97,8 @@ func (t *thumbCache) bitmap(url string, size int) *ui.Bitmap {
 	url = thumbnailURL(url, size)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if bitmap, ok := t.bitmaps[url]; ok {
-		return bitmap
+	if entry, ok := t.bitmaps[url]; ok {
+		return t.touch(entry)
 	}
 	if !t.pending[url] {
 		if failedAt, ok := t.failed[url]; !ok || time.Since(failedAt) > thumbRetry {
@@ -88,11 +108,18 @@ func (t *thumbCache) bitmap(url string, size int) *ui.Bitmap {
 		}
 	}
 	for _, other := range t.sizes[sizeless(url)] {
-		if bitmap, ok := t.bitmaps[other]; ok {
-			return bitmap
+		if entry, ok := t.bitmaps[other]; ok {
+			return t.touch(entry)
 		}
 	}
 	return nil
+}
+
+// touch marks a bitmap as drawn now and returns it.
+func (t *thumbCache) touch(entry *thumb) *ui.Bitmap {
+	t.tick++
+	entry.used = t.tick
+	return entry.bitmap
 }
 
 func (t *thumbCache) fetch(url string) {
@@ -109,11 +136,12 @@ func (t *thumbCache) fetch(url string) {
 	}
 	// The picture is decoded once, for the bitmap and for its colour alike.
 	var bitmap *ui.Bitmap
-	var img image.Image
+	var colour ui.Color
+	var hasColour bool
 	if len(data) > 0 {
-		if decoded, _, err := image.Decode(bytes.NewReader(data)); err == nil {
-			img = decoded
+		if img, _, err := image.Decode(bytes.NewReader(data)); err == nil {
 			bitmap = ui.NewBitmap(img)
+			colour, hasColour = dominantColour(img)
 		}
 	}
 	data = nil
@@ -126,33 +154,50 @@ func (t *thumbCache) fetch(url string) {
 		time.AfterFunc(thumbRetry+time.Second, t.notify)
 		return
 	}
-	t.bitmaps[url] = bitmap
-	if colour, ok := dominantColour(img); ok {
-		t.colours[url] = colour
-	}
-	t.order = append(t.order, url)
-	base := sizeless(url)
-	t.sizes[base] = append(t.sizes[base], url)
-	for len(t.order) > thumbLimit {
-		oldest := t.order[0]
-		delete(t.bitmaps, oldest)
-		delete(t.colours, oldest)
-		t.order = t.order[1:]
-		oldBase := sizeless(oldest)
-		kept := t.sizes[oldBase][:0]
-		for _, other := range t.sizes[oldBase] {
-			if other != oldest {
-				kept = append(kept, other)
-			}
-		}
-		if len(kept) == 0 {
-			delete(t.sizes, oldBase)
-		} else {
-			t.sizes[oldBase] = kept
-		}
-	}
+	t.store(url, &thumb{bitmap: bitmap, colour: colour, hasColour: hasColour, bytes: thumbBytes(bitmap)})
 	t.mu.Unlock()
 	t.notify()
+}
+
+// store keeps a bitmap that has landed, and drops the ones drawn least
+// recently while the cache is over its budget. The caller holds the lock.
+func (t *thumbCache) store(url string, entry *thumb) {
+	t.bitmaps[url] = entry
+	t.touch(entry)
+	t.held += entry.bytes
+	base := sizeless(url)
+	t.sizes[base] = append(t.sizes[base], url)
+	for t.held > thumbBudget && len(t.bitmaps) > 1 {
+		t.evictLeastRecent(url)
+	}
+}
+
+// evictLeastRecent drops the bitmap that went longest without being drawn,
+// other than keep, which has only just landed.
+func (t *thumbCache) evictLeastRecent(keep string) {
+	oldest, found := "", false
+	for url, entry := range t.bitmaps {
+		if url != keep && (!found || entry.used < t.bitmaps[oldest].used) {
+			oldest, found = url, true
+		}
+	}
+	if !found {
+		return
+	}
+	t.held -= t.bitmaps[oldest].bytes
+	delete(t.bitmaps, oldest)
+	base := sizeless(oldest)
+	kept := t.sizes[base][:0]
+	for _, other := range t.sizes[base] {
+		if other != oldest {
+			kept = append(kept, other)
+		}
+	}
+	if len(kept) == 0 {
+		delete(t.sizes, base)
+	} else {
+		t.sizes[base] = kept
+	}
 }
 
 var (
@@ -189,8 +234,10 @@ func (t *thumbCache) colour(url string, size int) (ui.Color, bool) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	c, ok := t.colours[thumbnailURL(url, size)]
-	return c, ok
+	if entry, ok := t.bitmaps[thumbnailURL(url, size)]; ok && entry.hasColour {
+		return entry.colour, true
+	}
+	return ui.Color{}, false
 }
 
 // dominantColour finds the colour of a picture that a theme should grow from:
