@@ -440,3 +440,42 @@ func TestCookieAuthenticationAndAllAccounts(t *testing.T) {
 		t.Fatal("NewCookieAuth accepted cookies without SAPISID")
 	}
 }
+
+func TestLoadPlayerKeepsTheScriptWhileTheIDHolds(t *testing.T) {
+	var scripts atomic.Int32
+	playerID := "first-player"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/iframe_api":
+			_, _ = w.Write([]byte(`player\/` + playerID + `\/player_ias.vflset/en_US/base.js`))
+		case strings.HasSuffix(r.URL.Path, "/base.js"):
+			scripts.Add(1)
+			_, _ = w.Write([]byte(`var config={signatureTimestamp:19372};`))
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(Options{BaseURL: server.URL, APIKey: "key"})
+	first, err := client.loadPlayer(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.expiresAt = time.Now().Add(-time.Second)
+	again, err := client.loadPlayer(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != first || scripts.Load() != 1 || !again.expiresAt.After(time.Now()) {
+		t.Errorf("same ID: player kept = %v, scripts fetched = %d, expiry moved = %v", again == first, scripts.Load(), again.expiresAt.After(time.Now()))
+	}
+	again.expiresAt = time.Now().Add(-time.Second)
+	playerID = "second-player"
+	next, err := client.loadPlayer(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next == first || next.metadata.PlayerID != "second-player" || scripts.Load() != 2 {
+		t.Errorf("new ID: player replaced = %v, scripts fetched = %d", next != first, scripts.Load())
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,47 +54,54 @@ func (c *Client) loadPlayer(ctx context.Context) (*playerScript, error) {
 	if err != nil {
 		return nil, fmt.Errorf("youtube: load player iframe API: %w", err)
 	}
-	normalized := strings.ReplaceAll(iframe, `\\/`, "/")
+	normalized := strings.ReplaceAll(string(iframe), `\\/`, "/")
 	normalized = strings.ReplaceAll(normalized, `\/`, "/")
 	match := playerIDPattern.FindStringSubmatch(normalized)
 	if len(match) < 2 {
 		return nil, errors.New("youtube: player ID not found in iframe API")
 	}
 	playerID := match[1]
+	// The script is megabytes and what is taken from it is slow to extract,
+	// so a player the client already holds stays for as long as YouTube
+	// serves it, and only its expiry moves.
+	if c.player != nil && c.player.metadata.PlayerID == playerID {
+		c.player.expiresAt = time.Now().Add(playerCacheTTL)
+		return c.player, nil
+	}
 	scriptURL := fmt.Sprintf("%s/s/player/%s/player_es6.vflset/en_US/base.js", c.baseURL, playerID)
 	script, err := c.getText(ctx, scriptURL)
 	if err != nil {
 		return nil, fmt.Errorf("youtube: load player script: %w", err)
 	}
-	timestampMatch := playerTimestampPattern.FindStringSubmatch(script)
+	timestampMatch := playerTimestampPattern.FindSubmatch(script)
 	if len(timestampMatch) < 2 {
 		return nil, errors.New("youtube: signature timestamp not found in player script")
 	}
-	var timestamp int
-	if _, err := fmt.Sscan(timestampMatch[1], &timestamp); err != nil {
+	timestamp, err := strconv.Atoi(string(timestampMatch[1]))
+	if err != nil {
 		return nil, fmt.Errorf("youtube: parse signature timestamp: %w", err)
 	}
 	metadata := PlayerMetadata{PlayerID: playerID, SignatureTimestamp: timestamp, ScriptURL: scriptURL}
-	c.player = &playerScript{metadata: metadata, source: []byte(script), expiresAt: time.Now().Add(playerCacheTTL)}
+	c.player = &playerScript{metadata: metadata, source: script, expiresAt: time.Now().Add(playerCacheTTL)}
 	return c.player, nil
 }
 
-func (c *Client) getText(ctx context.Context, endpoint string) (string, error) {
+func (c *Client) getText(ctx context.Context, endpoint string) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", responseError("load player metadata", response)
+		return nil, responseError("load player metadata", response)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(body), nil
+	return body, nil
 }
