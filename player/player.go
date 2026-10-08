@@ -186,8 +186,9 @@ func (p *Player) Playing() bool {
 func (p *Player) Buffering() bool {
 	p.mu.Lock()
 	s := p.session
+	paused := s != nil && s.paused
 	p.mu.Unlock()
-	if s == nil || s.paused || s.source.read.Load() > 0 {
+	if s == nil || paused || s.source.read.Load() > 0 {
 		return false
 	}
 	select {
@@ -221,10 +222,7 @@ func (p *Player) Position() time.Duration {
 	if s == nil {
 		return 0
 	}
-	played := s.source.read.Load() - int64(s.out.BufferedSize())
-	if played < 0 {
-		played = 0
-	}
+	played := max(s.source.read.Load()-int64(s.out.BufferedSize()), 0)
 	return s.offset + time.Duration(played*int64(time.Second)/bytesPerSecond)
 }
 
@@ -234,8 +232,9 @@ func (p *Player) Position() time.Duration {
 func (p *Player) Failure() string {
 	p.mu.Lock()
 	s := p.session
+	stopped := s != nil && s.stopped
 	p.mu.Unlock()
-	if s == nil || s.stopped {
+	if s == nil || stopped {
 		return ""
 	}
 	select {
@@ -345,11 +344,14 @@ func (p *Player) stopLocked() {
 	p.session = nil
 	s.stopped = true
 	close(s.quit)
-	s.out.PauseAndStopReading()
-	_ = s.pipe.Close()
+	// ffmpeg goes first, and the pipe with it. oto may be blocked reading a
+	// stream that has stalled, and PauseAndStopReading waits for that read, on
+	// the thread of whoever pressed stop, with the lock held.
 	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 	}
+	_ = s.pipe.Close()
+	s.out.PauseAndStopReading()
 }
 
 func (p *Player) resolveFFmpeg() (string, error) {

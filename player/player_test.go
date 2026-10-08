@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -149,5 +151,35 @@ func TestSessionReadsEverythingAfterTheProcessExits(t *testing.T) {
 	}
 	if got := p.Failure(); got != "" {
 		t.Errorf("failure %q after a clean end", got)
+	}
+}
+
+// Stopping must not wait for ffmpeg: a stream that has stalled keeps oto's read
+// blocked on the pipe, and the user pressing next is on the main thread.
+func TestStopDoesNotWaitForAStalledStream(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "ffmpeg")
+	body := "#!/bin/sh\nhead -c 4096 /dev/zero\nexec sleep 60\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := New(WithFFmpeg(script))
+	if _, err := p.audioContext(); err != nil {
+		t.Skipf("no audio device: %v", err)
+	}
+	if err := p.Play("http://example.invalid/stalled"); err != nil {
+		t.Fatal(err)
+	}
+	// Let oto take the bytes there are and block on the rest.
+	time.Sleep(300 * time.Millisecond)
+
+	stopped := make(chan struct{})
+	go func() {
+		p.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop is waiting for ffmpeg")
 	}
 }
