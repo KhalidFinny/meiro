@@ -17,8 +17,9 @@ type CookieOptions struct {
 }
 
 // CookieAuth contains browser cookies used to authenticate InnerTube calls.
-// Treat the cookie string as a password. Cookie auth is required for listing
-// every channel on a Google account; OAuth exposes only the active channel.
+// Treat the cookie string as a password. Cookie auth is how the client reaches
+// an account: it is what the YouTube Music web app signs in with, and it is
+// the only way to the personal home page, the library and every channel.
 type CookieAuth struct {
 	cookie         string
 	sapisid        string

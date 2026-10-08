@@ -30,8 +30,8 @@ func (a *app) libraryPage(c *ui.Context) {
 	}
 	ui.Column(c).Fill().Center().Children(func() {
 		a.message(c, m3.IconLibraryFilled, "Your library lives here",
-			"Sign in with your Google account to see your songs, albums and playlists.",
-			"Sign in with Google", a.signInWithGoogle)
+			"Sign in to see your songs, albums and playlists.",
+			"Sign in", a.signInWithGoogle)
 	})
 }
 
@@ -39,8 +39,18 @@ func (a *app) libraryPage(c *ui.Context) {
 // view, so a page of hundreds of songs is as light as one of ten.
 func (a *app) pageList(c *ui.Context) {
 	a.setRows()
-	a.list.Key = func(i int) any { return a.rows[i].key() }
+	// A button in a row can reload the page, and empty the rows, while the list
+	// still looks for the row that held the focus.
+	a.list.Key = func(i int) any {
+		if i >= len(a.rows) {
+			return nil
+		}
+		return a.rows[i].key()
+	}
 	a.list.Label = func(i int) string {
+		if i >= len(a.rows) {
+			return ""
+		}
 		if r := a.rows[i]; r.kind == rowTrack {
 			return r.item.Title
 		} else {

@@ -295,11 +295,11 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*BrowseRes
 	return c.browse(ctx, playlistID)
 }
 
-// GetAccountDetails returns the active signed-in account. It requires a
-// configured OAuth session; YouTube's OAuth flow reports the active channel.
+// GetAccountDetails returns the active signed-in account. It requires cookie
+// authentication.
 func (c *Client) GetAccountDetails(ctx context.Context) (*AccountDetails, error) {
-	if c.oauth == nil && c.cookieAuth == nil {
-		return nil, errors.New("youtube: GetAccountDetails requires OAuth or cookie authentication")
+	if c.cookieAuth == nil {
+		return nil, errors.New("youtube: GetAccountDetails requires cookie authentication")
 	}
 	raw, err := c.executeForClient(ctx, "account/accounts_list", map[string]any{}, "TV")
 	if err != nil {
@@ -339,7 +339,6 @@ func (c *Client) GetAccountDetails(ctx context.Context) (*AccountDetails, error)
 }
 
 // GetAccounts lists all channels available to a cookie-authenticated account.
-// YouTube's OAuth flow returns only the active channel.
 func (c *Client) GetAccounts(ctx context.Context) (*AccountList, error) {
 	if c.cookieAuth == nil {
 		return nil, errors.New("youtube: GetAccounts requires cookie authentication")
@@ -356,8 +355,8 @@ func (c *Client) GetAccounts(ctx context.Context) (*AccountList, error) {
 
 // GetAccountSettings returns the account overview page for the signed-in user.
 func (c *Client) GetAccountSettings(ctx context.Context) (*BrowseResult, error) {
-	if c.oauth == nil && c.cookieAuth == nil {
-		return nil, errors.New("youtube: GetAccountSettings requires OAuth or cookie authentication")
+	if c.cookieAuth == nil {
+		return nil, errors.New("youtube: GetAccountSettings requires cookie authentication")
 	}
 	raw, err := c.executeForClient(ctx, "browse", map[string]any{"browseId": "SPaccount_overview"}, "WEB")
 	if err != nil {

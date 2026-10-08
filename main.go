@@ -2,7 +2,7 @@
 // Material 3 Expressive.
 //
 // It browses the public catalogue with the youtube package, and the
-// account's library once the user signs in with their Google account.
+// account's library once the user signs in with their YouTube Music session.
 // Playback resolves a stream URL and decodes it in a child ffmpeg; see
 // package player. The interface is built from the components of package m3,
 // which take their colours, shapes and motion from one theme.
@@ -35,11 +35,11 @@ type app struct {
 	run func(work func())
 
 	// The YouTube clients: public browses without an account, authed with
-	// one. The store keeps a sign-in across restarts.
+	// its cookie once the user signs in. The store keeps the sign-in across
+	// restarts.
 	public   *youtube.Client
 	authed   *youtube.Client
-	oauth    *youtube.OAuth
-	store    youtube.TokenStore
+	store    cookieStore
 	account  youtube.AccountDetails
 	signedIn bool
 	signIn   signInState
@@ -155,15 +155,13 @@ func (a *app) setup() {
 		a.volume = a.settings.Volume
 		a.player.SetVolume(a.volume / 100)
 	}
-	store, err := newTokenStore()
+	a.public = youtube.NewClient(youtube.Options{})
+	store, err := newCookieStore()
 	if err != nil {
 		a.signIn.err = err.Error()
 		return
 	}
 	a.store = store
-	a.oauth = youtube.NewOAuth(youtube.OAuthConfig{TokenStore: store})
-	a.public = youtube.NewClient(youtube.Options{})
-	a.authed = youtube.NewClient(youtube.Options{OAuth: a.oauth})
 	a.restoreAccount()
 }
 

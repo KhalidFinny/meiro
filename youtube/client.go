@@ -60,7 +60,6 @@ type Options struct {
 	Country          string
 	// PlayerPoToken supplies an optional precomputed playback PO token.
 	PlayerPoToken string
-	OAuth         *OAuth
 	CookieAuth    *CookieAuth
 }
 
@@ -77,7 +76,6 @@ type Client struct {
 	language         string
 	country          string
 	playerPoToken    string
-	oauth            *OAuth
 	cookieAuth       *CookieAuth
 
 	configMu sync.Mutex
@@ -125,7 +123,6 @@ func NewClient(options Options) *Client {
 		language:         options.Language,
 		country:          options.Country,
 		playerPoToken:    options.PlayerPoToken,
-		oauth:            options.OAuth,
 		cookieAuth:       options.CookieAuth,
 	}
 }
@@ -151,7 +148,9 @@ func (c *Client) context() clientContext {
 	ctx.Client.GL = c.country
 	ctx.Client.ClientName = defaultMusicContext
 	ctx.Client.ClientVersion = c.clientVersion
-	ctx.Client.VisitorData = c.visitorData
+	if c.cookieAuth == nil {
+		ctx.Client.VisitorData = c.visitorData
+	}
 	return ctx
 }
 
@@ -245,7 +244,8 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 	req.Header.Set("Referer", origin+"/")
 	req.Header.Set("X-YouTube-Client-Name", clientID)
 	req.Header.Set("X-YouTube-Client-Version", clientVersion)
-	if c.visitorData != "" {
+	// The visitor ID is an anonymous visit's; a signed-in session is its own.
+	if c.visitorData != "" && c.cookieAuth == nil {
 		req.Header.Set("X-Goog-Visitor-Id", c.visitorData)
 	}
 	if client == "TV" {
@@ -258,12 +258,6 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 		if c.cookieAuth.onBehalfOfUser != "" {
 			req.Header.Set("X-Goog-PageId", c.cookieAuth.onBehalfOfUser)
 		}
-	} else if c.oauth != nil {
-		token, err := c.oauth.AccessToken(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("youtube: get OAuth access token: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

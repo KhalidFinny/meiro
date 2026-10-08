@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,34 +11,39 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo"
-
-	"github.com/elianiva/meiro/youtube"
 )
 
 // Where the sign-in lives in the system's credential store.
 const (
 	secretService = "com.elianiva.meiro"
-	secretAccount = "oauth"
+	secretAccount = "cookie"
+	// legacyAccount held the OAuth tokens of earlier versions.
+	legacyAccount = "oauth"
 )
 
 var (
+	// errNotSignedIn reports that no cookie is saved.
+	errNotSignedIn = errors.New("not signed in")
 	// errSecretNotFound reports that the system store holds no such secret.
 	errSecretNotFound = errors.New("secret not found")
 	// errNoCredentialStore reports that the system has no credential store
-	// the app can reach, so the tokens stay in a file.
+	// the app can reach, so the cookie stays in a file.
 	errNoCredentialStore = errors.New("no system credential store")
 )
 
-// newTokenStore returns the store the app keeps its sign-in in: the
+// newCookieStore returns the store the app keeps its sign-in in: the
 // operating system's credential store, with a file only its user can read
-// as the fallback.
-func newTokenStore() (youtube.TokenStore, error) {
+// as the fallback. It also forgets what earlier versions kept there, the
+// OAuth tokens, which nothing reads any more.
+func newCookieStore() (*keychainStore, error) {
 	directory, err := mygo.App.Path(mygo.PathUserData)
 	if err != nil {
 		return nil, err
 	}
+	secret{service: secretService, account: legacyAccount}.remove()
+	_ = os.Remove(filepath.Join(directory, "auth.json"))
 	system := secret{service: secretService, account: secretAccount}
-	return &keychainStore{system: system, file: newFileStore(filepath.Join(directory, "auth.json"))}, nil
+	return &keychainStore{system: system, file: newFileStore(filepath.Join(directory, "cookie.txt"))}, nil
 }
 
 // credentialStore is one secret of the operating system's credential store.
@@ -54,7 +58,7 @@ type credentialStore interface {
 // secret is a credential in the store the platform provides: the login
 // keychain on macOS, reached through the security tool, and the Secret
 // Service on Linux, reached through secret-tool. Other systems have neither
-// command, and the app keeps the tokens in a file there.
+// command, and the app keeps the cookie in a file there.
 type secret struct {
 	service string
 	account string
@@ -151,54 +155,52 @@ func missingSecret(err error) bool {
 	return exit.ExitCode() == 44 || exit.ExitCode() == 1
 }
 
-// keychainStore keeps the OAuth tokens in the system's credential store,
-// and in a file only their user can read when the system has no store or
-// the store refuses them.
+// cookieStore keeps the sign-in between runs.
+type cookieStore interface {
+	Load(ctx context.Context) (string, error)
+	Save(ctx context.Context, cookie string) error
+	Delete(ctx context.Context) error
+}
+
+// keychainStore keeps the sign-in, the Cookie header of the account's
+// browser session, in the system's credential store, and in a file only its
+// user can read when the system has no store or the store refuses it.
 type keychainStore struct {
 	system credentialStore
 	file   *fileStore
 }
 
-func (s *keychainStore) Load(ctx context.Context) (youtube.Tokens, error) {
+func (s *keychainStore) Load(ctx context.Context) (string, error) {
 	if s.system.available() {
 		if value, err := s.system.get(); err == nil {
-			var tokens youtube.Tokens
-			if err := json.Unmarshal([]byte(value), &tokens); err != nil {
-				return youtube.Tokens{}, fmt.Errorf("decode the saved sign-in: %w", err)
-			}
-			return tokens, nil
+			return value, nil
 		}
 	}
 	// The system store holds nothing, or would not answer, as a locked
-	// keychain will not: an earlier version of the app, or one whose store
-	// refused it, may have left the tokens in the file. Finding them there
-	// moves them into the store.
-	tokens, err := s.file.Load(ctx)
+	// keychain will not: a run whose store refused the cookie may have left
+	// it in the file. Finding it there moves it into the store.
+	cookie, err := s.file.Load(ctx)
 	if err != nil {
-		return youtube.Tokens{}, err
+		return "", err
 	}
 	if s.system.available() {
-		if data, err := json.Marshal(tokens); err == nil {
-			if err := s.system.set(string(data)); err == nil {
-				_ = s.file.Delete(ctx)
-			}
+		if err := s.system.set(cookie); err == nil {
+			_ = s.file.Delete(ctx)
 		}
 	}
-	return tokens, nil
+	return cookie, nil
 }
 
-func (s *keychainStore) Save(ctx context.Context, tokens youtube.Tokens) error {
+func (s *keychainStore) Save(ctx context.Context, cookie string) error {
 	if s.system.available() {
-		if data, err := json.Marshal(tokens); err == nil {
-			if err := s.system.set(string(data)); err == nil {
-				// The tokens do not belong in the file once the system
-				// store has them.
-				_ = s.file.Delete(ctx)
-				return nil
-			}
+		if err := s.system.set(cookie); err == nil {
+			// The cookie does not belong in the file once the system
+			// store has it.
+			_ = s.file.Delete(ctx)
+			return nil
 		}
 	}
-	return s.file.Save(ctx, tokens)
+	return s.file.Save(ctx, cookie)
 }
 
 func (s *keychainStore) Delete(ctx context.Context) error {
@@ -208,38 +210,34 @@ func (s *keychainStore) Delete(ctx context.Context) error {
 	return s.file.Delete(ctx)
 }
 
-// fileStore keeps the OAuth tokens in a file only their user can read.
+// fileStore keeps the cookie in a file only its user can read.
 type fileStore struct {
 	path string
 }
 
 func newFileStore(path string) *fileStore { return &fileStore{path: path} }
 
-func (s *fileStore) Load(context.Context) (youtube.Tokens, error) {
+func (s *fileStore) Load(context.Context) (string, error) {
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return youtube.Tokens{}, youtube.ErrNoStoredTokens
+		return "", errNotSignedIn
 	}
 	if err != nil {
-		return youtube.Tokens{}, err
+		return "", err
 	}
-	var tokens youtube.Tokens
-	if err := json.Unmarshal(data, &tokens); err != nil {
-		return youtube.Tokens{}, err
+	cookie := strings.TrimSpace(string(data))
+	if cookie == "" {
+		return "", errNotSignedIn
 	}
-	return tokens, nil
+	return cookie, nil
 }
 
-func (s *fileStore) Save(_ context.Context, tokens youtube.Tokens) error {
-	data, err := json.Marshal(tokens)
-	if err != nil {
-		return err
-	}
+func (s *fileStore) Save(_ context.Context, cookie string) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
 	}
-	// The refresh token is a credential: keep it readable by this user only.
-	return os.WriteFile(s.path, data, 0o600)
+	// The cookie is a credential: keep it readable by this user only.
+	return os.WriteFile(s.path, []byte(cookie), 0o600)
 }
 
 func (s *fileStore) Delete(context.Context) error {

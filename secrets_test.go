@@ -6,9 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/elianiva/meiro/youtube"
 )
 
 // fakeKeychain is a credential store kept in memory, so the tests never
@@ -43,31 +40,25 @@ func (f *fakeKeychain) get() (string, error) {
 
 func (f *fakeKeychain) remove() { f.holds, f.value = false, "" }
 
-func testTokens() youtube.Tokens {
-	return youtube.Tokens{
-		AccessToken:  "access",
-		RefreshToken: "refresh",
-		ExpiryDate:   time.Now().Add(time.Hour),
-	}
-}
+const testCookie = "SAPISID=secret; SID=other"
 
 func TestFileStoreRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "auth.json")
+	path := filepath.Join(t.TempDir(), "cookie.txt")
 	store := newFileStore(path)
 
-	if _, err := store.Load(ctx); !errors.Is(err, youtube.ErrNoStoredTokens) {
+	if _, err := store.Load(ctx); !errors.Is(err, errNotSignedIn) {
 		t.Fatalf("Load of an empty store = %v", err)
 	}
-	if err := store.Save(ctx, testTokens()); err != nil {
+	if err := store.Save(ctx, testCookie); err != nil {
 		t.Fatal(err)
 	}
-	tokens, err := store.Load(ctx)
+	cookie, err := store.Load(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tokens.RefreshToken != "refresh" {
-		t.Errorf("loaded %+v", tokens)
+	if cookie != testCookie {
+		t.Errorf("loaded %q", cookie)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -79,7 +70,7 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	if err := store.Delete(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Load(ctx); !errors.Is(err, youtube.ErrNoStoredTokens) {
+	if _, err := store.Load(ctx); !errors.Is(err, errNotSignedIn) {
 		t.Errorf("Load after Delete = %v", err)
 	}
 	if err := store.Delete(ctx); err != nil {
@@ -87,124 +78,124 @@ func TestFileStoreRoundTrip(t *testing.T) {
 	}
 }
 
-func TestTokensGoToTheSystemStore(t *testing.T) {
+func TestCookieGoToTheSystemStore(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "auth.json")
+	path := filepath.Join(t.TempDir(), "cookie.txt")
 	system := &fakeKeychain{usable: true}
 	store := &keychainStore{system: system, file: newFileStore(path)}
 
-	if err := store.Save(ctx, testTokens()); err != nil {
+	if err := store.Save(ctx, testCookie); err != nil {
 		t.Fatal(err)
 	}
 	if !system.holds {
-		t.Error("the tokens did not reach the system store")
+		t.Error("the cookie did not reach the system store")
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Error("the tokens were also written to the file")
+		t.Error("the cookie were also written to the file")
 	}
-	tokens, err := store.Load(ctx)
+	cookie, err := store.Load(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tokens.RefreshToken != "refresh" {
-		t.Errorf("loaded %+v", tokens)
+	if cookie != testCookie {
+		t.Errorf("loaded %q", cookie)
 	}
 }
 
-func TestTokensFallBackToTheFile(t *testing.T) {
+func TestCookieFallBackToTheFile(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "auth.json")
+	path := filepath.Join(t.TempDir(), "cookie.txt")
 	system := &fakeKeychain{usable: true, setErr: errors.New("the keychain is locked")}
 	store := &keychainStore{system: system, file: newFileStore(path)}
 
-	if err := store.Save(ctx, testTokens()); err != nil {
+	if err := store.Save(ctx, testCookie); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); err != nil {
-		t.Errorf("the tokens did not reach the file: %v", err)
+		t.Errorf("the cookie did not reach the file: %v", err)
 	}
-	tokens, err := store.Load(ctx)
+	cookie, err := store.Load(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tokens.RefreshToken != "refresh" {
-		t.Errorf("loaded %+v", tokens)
+	if cookie != testCookie {
+		t.Errorf("loaded %q", cookie)
 	}
 }
 
-func TestTokensFallBackWithoutAStore(t *testing.T) {
+func TestCookieFallBackWithoutAStore(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "auth.json")
+	path := filepath.Join(t.TempDir(), "cookie.txt")
 	store := &keychainStore{system: &fakeKeychain{}, file: newFileStore(path)}
 
-	if err := store.Save(ctx, testTokens()); err != nil {
+	if err := store.Save(ctx, testCookie); err != nil {
 		t.Fatal(err)
 	}
-	tokens, err := store.Load(ctx)
+	cookie, err := store.Load(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tokens.RefreshToken != "refresh" {
-		t.Errorf("loaded %+v", tokens)
+	if cookie != testCookie {
+		t.Errorf("loaded %q", cookie)
 	}
 }
 
-func TestTokensFallBackToTheFileWhenTheStoreWillNotAnswer(t *testing.T) {
+func TestCookieFallBackToTheFileWhenTheStoreWillNotAnswer(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "auth.json")
+	path := filepath.Join(t.TempDir(), "cookie.txt")
 	file := newFileStore(path)
-	if err := file.Save(ctx, testTokens()); err != nil {
+	if err := file.Save(ctx, testCookie); err != nil {
 		t.Fatal(err)
 	}
 	// A locked keychain refuses the read, which must not sign the user out
-	// of tokens the file still holds.
+	// of the cookie the file still holds.
 	system := &fakeKeychain{usable: true, getErr: errors.New("the keychain is locked")}
 	store := &keychainStore{system: system, file: file}
 
-	tokens, err := store.Load(ctx)
+	cookie, err := store.Load(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tokens.RefreshToken != "refresh" {
-		t.Errorf("loaded %+v", tokens)
+	if cookie != testCookie {
+		t.Errorf("loaded %q", cookie)
 	}
 }
 
-func TestTokensMoveFromTheFileToTheSystemStore(t *testing.T) {
+func TestCookieMoveFromTheFileToTheSystemStore(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "auth.json")
+	path := filepath.Join(t.TempDir(), "cookie.txt")
 	file := newFileStore(path)
-	if err := file.Save(ctx, testTokens()); err != nil {
+	if err := file.Save(ctx, testCookie); err != nil {
 		t.Fatal(err)
 	}
 	system := &fakeKeychain{usable: true}
 	store := &keychainStore{system: system, file: file}
 
-	tokens, err := store.Load(ctx)
+	cookie, err := store.Load(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tokens.RefreshToken != "refresh" {
-		t.Errorf("loaded %+v", tokens)
+	if cookie != testCookie {
+		t.Errorf("loaded %q", cookie)
 	}
 	if !system.holds {
-		t.Error("the tokens did not move into the system store")
+		t.Error("the cookie did not move into the system store")
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Error("the file is still there after the move")
 	}
 }
 
-func TestSignOutForgetsTheTokensEverywhere(t *testing.T) {
+func TestSignOutForgetsTheCookieEverywhere(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "auth.json")
+	path := filepath.Join(t.TempDir(), "cookie.txt")
 	file := newFileStore(path)
 	system := &fakeKeychain{usable: true}
 	store := &keychainStore{system: system, file: file}
-	if err := file.Save(ctx, testTokens()); err != nil {
+	if err := file.Save(ctx, testCookie); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(ctx, testTokens()); err != nil {
+	if err := store.Save(ctx, testCookie); err != nil {
 		t.Fatal(err)
 	}
 
@@ -212,12 +203,12 @@ func TestSignOutForgetsTheTokensEverywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	if system.holds {
-		t.Error("the system store still holds the tokens")
+		t.Error("the system store still holds the cookie")
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Error("the file is still there")
 	}
-	if _, err := store.Load(ctx); !errors.Is(err, youtube.ErrNoStoredTokens) {
+	if _, err := store.Load(ctx); !errors.Is(err, errNotSignedIn) {
 		t.Errorf("Load after Delete = %v", err)
 	}
 }

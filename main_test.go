@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -420,3 +421,85 @@ const playerResponse = `{
 	"streamingData":{"adaptiveFormats":[{"itag":251,"mimeType":"audio/webm; codecs=\"opus\"","bitrate":136544,"url":"https://media.test/audio"}]},
 	"playabilityStatus":{"status":"OK"}
 }`
+
+func TestCookieHeader(t *testing.T) {
+	const want = "SAPISID=abc; SID=def"
+	for name, in := range map[string]string{
+		"value":        want,
+		"padded":       "  " + want + "\n",
+		"header":       "Cookie: " + want,
+		"lowercase":    "cookie: " + want,
+		"curl":         "curl 'https://music.youtube.com/youtubei/v1/browse' -H 'cookie: " + want + "' -H 'origin: x'",
+		"curl doubled": `curl "https://music.youtube.com" -H "cookie: ` + want + `" --compressed`,
+	} {
+		if got := cookieHeader(in); got != want {
+			t.Errorf("%s: cookieHeader = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestCookieFromNetscape(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0)
+	text := strings.Join([]string{
+		"# Netscape HTTP Cookie File",
+		"",
+		".youtube.com\tTRUE\t/\tTRUE\t2100000000\tSAPISID\tabc",
+		"#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t2100000000\t__Secure-3PSID\tdef",
+		"music.youtube.com\tFALSE\t/\tTRUE\t0\tYSC\tsession",
+		".youtube.com\tTRUE\t/\tTRUE\t1000000000\tOLD\texpired",
+		".google.com\tTRUE\t/\tTRUE\t2100000000\tSID\tgoogle",
+		".notyoutube.com\tTRUE\t/\tTRUE\t2100000000\tEVIL\tx",
+		".youtube.com\tTRUE\t/\tTRUE\t2100000000\tSAPISID\tnewer",
+		"broken line",
+	}, "\n")
+	got := cookieFromNetscape(text, now)
+	want := "SAPISID=newer; __Secure-3PSID=def; YSC=session"
+	if got != want {
+		t.Errorf("cookieFromNetscape = %q, want %q", got, want)
+	}
+	if got := cookieFromNetscape("# nothing\n", now); got != "" {
+		t.Errorf("an empty file gave %q", got)
+	}
+}
+
+func TestChromiumProfiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, database := range []string{"Default/Cookies", "Profile 3/Network/Cookies", "Profile 1/Preferences", "Crashpad/Cookies"} {
+		path := filepath.Join(dir, filepath.FromSlash(database))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := chromiumProfiles(dir)
+	want := []string{filepath.Join(dir, "Default"), filepath.Join(dir, "Profile 3")}
+	if !slices.Equal(got, want) {
+		t.Errorf("chromiumProfiles = %q, want %q", got, want)
+	}
+	if got := chromiumProfiles(filepath.Join(dir, "missing")); got != nil {
+		t.Errorf("a missing directory gave %q", got)
+	}
+}
+
+func TestSignInDialogOffersBrowsersInADropdown(t *testing.T) {
+	a := newTestApp()
+	tt := ui.NewTester(a.view, 1000, 700)
+	a.signInWithGoogle()
+	tt.Frame()
+	if !tt.HasText("Import from a browser") {
+		t.Fatalf("the sign-in dialog has no import button: %q", tt.Texts())
+	}
+	if tt.HasText("Firefox") {
+		t.Errorf("the browsers are listed before the dropdown opens: %q", tt.Texts())
+	}
+	if err := tt.Click("Import from a browser"); err != nil {
+		t.Fatal(err)
+	}
+	for _, browser := range []string{"Chrome", "Safari", "Firefox", "Brave", "Edge"} {
+		if !tt.HasText(browser) {
+			t.Errorf("the dropdown is missing %s: %q", browser, tt.Texts())
+		}
+	}
+}

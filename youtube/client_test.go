@@ -347,12 +347,12 @@ func TestLyricsRelatedAndRecapUseReadOnlyEndpoints(t *testing.T) {
 	}
 }
 
-func TestGetAccountDetailsUsesOAuth(t *testing.T) {
+func TestGetAccountDetailsUsesCookie(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/youtubei/v1/account/accounts_list" {
 			t.Fatalf("request path = %q", r.URL.Path)
 		}
-		if got := r.Header.Get("Authorization"); got != "Bearer account-token" {
+		if got := r.Header.Get("Authorization"); !strings.HasPrefix(got, "SAPISIDHASH ") {
 			t.Errorf("Authorization = %q", got)
 		}
 		if got := r.Header.Get("X-YouTube-Client-Name"); got != "7" {
@@ -369,13 +369,11 @@ func TestGetAccountDetailsUsesOAuth(t *testing.T) {
 		_, _ = w.Write([]byte(`{"accountName":"Me"}`))
 	}))
 	defer server.Close()
-	oauth := NewOAuth(OAuthConfig{HTTPClient: server.Client(), BaseURL: server.URL})
-	if err := oauth.SetTokens(Tokens{
-		AccessToken: "account-token", RefreshToken: "refresh", ExpiryDate: time.Now().Add(time.Hour),
-	}); err != nil {
+	cookieAuth, err := NewCookieAuth("SAPISID=secret", CookieOptions{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	client := NewClient(Options{HTTPClient: server.Client(), BaseURL: server.URL, APIKey: "key", OAuth: oauth})
+	client := NewClient(Options{HTTPClient: server.Client(), BaseURL: server.URL, APIKey: "key", CookieAuth: cookieAuth})
 	account, err := client.GetAccountDetails(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -440,164 +438,5 @@ func TestCookieAuthenticationAndAllAccounts(t *testing.T) {
 	}
 	if _, err := NewCookieAuth("SID=not-enough", CookieOptions{}); err == nil {
 		t.Fatal("NewCookieAuth accepted cookies without SAPISID")
-	}
-}
-
-func TestOAuthDiscoversClientCredentialsFromTV(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/tv":
-			_, _ = w.Write([]byte(`<script id="base-js" src="/base.js"></script>`))
-		case "/base.js":
-			_, _ = w.Write([]byte(`clientId:"discovered-id",clientSecret:"discovered-secret"`))
-		case "/o/oauth2/device/code":
-			var request map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				t.Error(err)
-			}
-			if request["client_id"] != "discovered-id" || request["device_model"] != "ytlr::" || request["device_id"] == "" {
-				t.Errorf("device authorization request = %#v", request)
-			}
-			_, _ = w.Write([]byte(`{"device_code":"device","user_code":"ABCD","verification_url":"https://google.test/device","expires_in":600,"interval":5}`))
-		default:
-			t.Errorf("unexpected OAuth path %q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-	oauth := NewOAuth(OAuthConfig{HTTPClient: server.Client(), BaseURL: server.URL})
-	code, err := oauth.BeginDeviceFlow(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code.DeviceCode != "device" {
-		t.Fatalf("device code = %#v", code)
-	}
-	oauth.mu.Lock()
-	credentials := oauth.credentials
-	oauth.mu.Unlock()
-	if credentials.ClientID != "discovered-id" || credentials.ClientSecret != "discovered-secret" {
-		t.Errorf("discovered credentials = %#v", credentials)
-	}
-}
-
-func TestOAuthRestoreRefreshesAndPersistsTokens(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/o/oauth2/token" {
-			t.Errorf("request path = %q", r.URL.Path)
-		}
-		_, _ = w.Write([]byte(`{"access_token":"refreshed","refresh_token":"rotated","expires_in":3600}`))
-	}))
-	defer server.Close()
-	store := &memoryTokenStore{tokens: Tokens{
-		AccessToken: "expired", RefreshToken: "refresh", ExpiryDate: time.Now().Add(-time.Minute),
-		Client: &OAuthClientCredentials{ClientID: "client-id", ClientSecret: "client-secret"},
-	}, exists: true}
-	oauth := NewOAuth(OAuthConfig{HTTPClient: server.Client(), BaseURL: server.URL, TokenStore: store})
-	if err := oauth.Restore(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := oauth.Tokens()
-	if !ok || got.AccessToken != "refreshed" || got.RefreshToken != "rotated" {
-		t.Errorf("restored tokens = %#v, found %v", got, ok)
-	}
-	if !store.exists || store.tokens.AccessToken != "refreshed" || store.tokens.RefreshToken != "rotated" {
-		t.Errorf("persisted tokens = %#v", store.tokens)
-	}
-}
-
-func TestOAuthDeviceFlowAndAutomaticRefresh(t *testing.T) {
-	var pollCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/o/oauth2/device/code":
-			_, _ = w.Write([]byte(`{"device_code":"device","user_code":"ABCD","verification_url":"https://google.test/device","expires_in":5,"interval":1}`))
-		case "/o/oauth2/token":
-			var payload map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-				t.Fatal(err)
-			}
-			if payload["client_secret"] != "client-secret" {
-				t.Errorf("client secret missing from token request")
-			}
-			if payload["grant_type"] == "refresh_token" {
-				_, _ = w.Write([]byte(`{"access_token":"refreshed","expires_in":3600}`))
-				return
-			}
-			if pollCount.Add(1) == 1 {
-				w.WriteHeader(http.StatusBadRequest)
-				_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
-				return
-			}
-			_, _ = w.Write([]byte(`{"access_token":"initial","refresh_token":"refresh","expires_in":3600}`))
-		default:
-			t.Fatalf("unexpected OAuth path %q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-	oauth := NewOAuth(OAuthConfig{
-		ClientID: "client-id", ClientSecret: "client-secret", HTTPClient: server.Client(), BaseURL: server.URL,
-	})
-	code, err := oauth.BeginDeviceFlow(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code.UserCode != "ABCD" || code.VerificationURL != "https://google.test/device" {
-		t.Fatalf("device code response = %#v", code)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	tokens, err := oauth.PollForTokens(ctx, code)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tokens.AccessToken != "initial" {
-		t.Fatalf("access token = %q", tokens.AccessToken)
-	}
-	if err := oauth.SetTokens(Tokens{
-		AccessToken: "expired", RefreshToken: "refresh", ExpiryDate: time.Now().Add(-time.Minute),
-		Client: &OAuthClientCredentials{ClientID: "client-id", ClientSecret: "client-secret"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	accessToken, err := oauth.AccessToken(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if accessToken != "refreshed" {
-		t.Errorf("refreshed access token = %q", accessToken)
-	}
-}
-
-type memoryTokenStore struct {
-	tokens Tokens
-	exists bool
-}
-
-func (store *memoryTokenStore) Load(context.Context) (Tokens, error) {
-	if !store.exists {
-		return Tokens{}, ErrNoStoredTokens
-	}
-	return store.tokens, nil
-}
-
-func (store *memoryTokenStore) Save(_ context.Context, tokens Tokens) error {
-	store.tokens = tokens
-	store.exists = true
-	return nil
-}
-
-func (store *memoryTokenStore) Delete(context.Context) error {
-	store.tokens = Tokens{}
-	store.exists = false
-	return nil
-}
-
-func TestSetTokensRejectsIncompleteCredentials(t *testing.T) {
-	oauth := NewOAuth(OAuthConfig{})
-	if err := oauth.SetTokens(Tokens{AccessToken: "only-access"}); err == nil {
-		t.Fatal("SetTokens accepted incomplete tokens")
-	}
-	if _, err := oauth.AccessToken(context.Background()); err == nil {
-		t.Fatal("AccessToken should require saved tokens")
 	}
 }

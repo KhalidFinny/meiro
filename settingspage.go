@@ -204,7 +204,7 @@ func (a *app) accountCard(c *ui.Context) {
 				return
 			}
 			settingLabel(c, "Not signed in", "Sign in to see your library. Browsing and playing work without it.").Grow(1)
-			if m3.Button(c, m3.ButtonSpec{Label: "Sign in with Google", Icon: m3.IconLogin, Size: m3.Medium56, Key: "sign-in"}).Clicked() {
+			if m3.Button(c, m3.ButtonSpec{Label: "Sign in", Icon: m3.IconLogin, Size: m3.Medium56, Key: "sign-in"}).Clicked() {
 				a.signInWithGoogle()
 			}
 		})

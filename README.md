@@ -8,9 +8,9 @@ itself, so the app starts at once and needs no web frontend.
 
 - Browses the public catalogue: the home and explore feeds, search, albums,
   playlists and artists.
-- Signs in with a Google account through the OAuth device flow, and keeps
-  the session across restarts.
-- Shows the account's library when signed in.
+- Signs in with the cookie of your YouTube Music browser session, and keeps
+  it across restarts.
+- Shows your own home page and library when signed in.
 - Plays music: play, pause, seek, previous, next, shuffle, repeat and volume,
   with the queue and the lyrics of the song in a full-screen player.
 - Themes itself from one colour you choose, or from the cover of the song
@@ -79,12 +79,24 @@ go tool mygo dev
 
 ## Sign in
 
-Choose **Sign in with Google**. The dialog shows a code: open the page it
-links to and enter the code there. Meiro keeps the tokens in your login
+YouTube Music serves a personal home page and library only to a request that
+carries the cookie of a signed-in browser; its OAuth tokens are refused by
+the Music web API. So Meiro borrows your browser's session.
+
+Sign in at music.youtube.com in your browser, then choose **Sign in** in
+Meiro and pick that browser (Chrome, Safari, Firefox, Brave or Edge). Meiro
+reads its YouTube cookies with `yt-dlp --cookies-from-browser`, which it
+needs for playback anyway; macOS may ask for your keychain password for
+Chrome and Brave, and Safari needs Full Disk Access for Meiro. To do it by
+hand instead, paste the value of the `Cookie` request header of a request to
+music.youtube.com, from the browser's developer tools.
+
+The cookie is a password: Meiro keeps it in your login
 keychain on macOS, through the `security` tool, and in the Secret Service
 on Linux, through `secret-tool`, so the next start is already signed in. A
-system with neither keeps them in a file in the app's data directory that
-only your user can read. **Sign out** removes them, here and at Google.
+system with neither keeps it in a file in the app's data directory that
+only your user can read. **Sign out** removes it. Signing out of YouTube in
+the browser, or the cookie expiring, ends the session here too.
 
 ## Test and build
 
@@ -131,14 +143,13 @@ seed hue, style and appearance. With `MEIRO_SNAPSHOTS=/some/dir`, `go test
 
 ### `youtube`
 
-A read-only YouTube Music client. It supports OAuth device login and token
-refresh, account details, music search, home and explore feeds, account and
-channel details, complete available library pages, artist/album/playlist
-browsing, track metadata and stream formats, lyrics, related tracks,
-listening recap, the up-next queue, and search suggestions. Browse and
-search results expose continuation tokens and typed sections. InnerTube
-responses are also exposed as raw JSON to keep the package useful as
-upstream formats evolve.
+A read-only YouTube Music client. It supports cookie authentication, account
+details, music search, home and explore feeds, account and channel details,
+complete available library pages, artist/album/playlist browsing, track
+metadata and stream formats, lyrics, related tracks, listening recap, the
+up-next queue, and search suggestions. Browse and search results expose
+continuation tokens and typed sections. InnerTube responses are also exposed
+as raw JSON to keep the package useful as upstream formats evolve.
 
 ```go
 import (
@@ -148,18 +159,12 @@ import (
 	"github.com/elianiva/meiro/youtube"
 )
 
-func searchMusic(ctx context.Context) error {
-	oauth := youtube.NewOAuth(youtube.OAuthConfig{})
-	code, err := oauth.BeginDeviceFlow(ctx)
+func searchMusic(ctx context.Context, cookie string) error {
+	auth, err := youtube.NewCookieAuth(cookie, youtube.CookieOptions{})
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Open %s and enter %s\n", code.VerificationURL, code.UserCode)
-	if _, err := oauth.PollForTokens(ctx, code); err != nil {
-		return err
-	}
-
-	music := youtube.NewClient(youtube.Options{OAuth: oauth})
+	music := youtube.NewClient(youtube.Options{CookieAuth: auth})
 	results, err := music.Search(ctx, "ambient", youtube.SearchOptions{Type: youtube.SearchSongs})
 	if err != nil {
 		return err
@@ -169,18 +174,12 @@ func searchMusic(ctx context.Context) error {
 }
 ```
 
-Public music metadata does not require OAuth. Account and library calls do.
-The client does not make playlist or account changes.
+Public music metadata does not require signing in. The home page, account and
+library calls do: pass the `Cookie` header of a signed-in browser session,
+which must contain `SAPISID`. The cookie is a credential; do not log it or put
+it in source control. The client does not make playlist or account changes.
 
-For sign-in across app restarts, provide an implementation of
-`youtube.TokenStore`. `OAuth.Restore` loads saved tokens, and device login
-and token refresh save them through that store. Meiro implements the store
-with the system's credential store, and falls back to a file only its user
-can read where the system has none.
-
-Cookie auth can list all channels available to the account. OAuth returns
-only the active channel. Cookies are sensitive credentials; do not log them
-or put them in source control.
+Cookie auth can also list all channels available to the account.
 
 ### `player`
 
