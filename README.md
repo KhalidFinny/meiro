@@ -47,13 +47,15 @@ system's keychain, and **Sign out** removes it.
 
 ## Build it yourself
 
+You need [Go](https://go.dev/dl/) and [just](https://just.systems/).
+
 ```sh
-go tool mygo dev
+just dev     # run with live reload, using ffmpeg and yt-dlp from your PATH
+just run     # build the production app, with its tools inside, and open it
 ```
 
-This needs [Go](https://go.dev/dl/), plus `ffmpeg` and `yt-dlp` on your
-`PATH`. The code is the best guide to the rest. Releases are built by pushing
-a version tag; see `.github/workflows/release.yml`.
+`just` lists the rest. Releases are built by pushing a version tag; see
+`.github/workflows/release.yml`.
 
 ## Credits
 
