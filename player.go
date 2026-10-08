@@ -260,55 +260,165 @@ func (a *app) nowPlayingMain(c *ui.Context, windowHeight float32) {
 	})
 }
 
-// sidePanel holds the queue and the lyrics under two tabs, on a tonal card.
+// sidePanel holds the queue, lyrics and related songs under tabs, on a tonal card.
 func (a *app) sidePanel(c *ui.Context, wide bool) {
 	sc := m3.Active().Scheme
 	card := ui.Column(c).Key("np-side").Radius(m3.ExtraLarge).Background(sc.SurfaceContainerLow.Alpha(0.9)).Clip().
 		Padding(8, 0, 0).Gap(4)
 	if wide {
-		card.Width(400).Shrink(0)
+		card.Width(480).Shrink(0)
 	} else {
 		card.Grow(1).MinWidth(0)
 	}
 	card.Children(func() {
-		ui.Row(c).Padding(12, 16, 8).Children(func() {
-			m3.ButtonGroup(c, "np-tabs", &a.npTab, []string{"Up next", "Lyrics"}, nil)
-		})
-		if a.npTab == 1 {
+		a.nowPlayingTabs(c)
+		switch a.npTab {
+		case 1:
 			a.lyricsView(c)
-			return
+		case 2:
+			a.relatedView(c)
+		default:
+			a.queueView(c)
 		}
-		a.queueView(c)
+	})
+}
+
+func (a *app) nowPlayingTabs(c *ui.Context) {
+	sc := m3.Active().Scheme
+	labels := []string{"Up next", "Lyrics", "Related"}
+	ui.Row(c).Padding(12, 12, 8).Gap(4).Children(func() {
+		for index, label := range labels {
+			selected := a.npTab == index
+			container, content := ui.Transparent, sc.OnSurfaceVariant
+			if selected {
+				container, content = sc.SecondaryContainer, sc.OnSecondaryContainer
+			}
+			button := ui.ButtonBase(c.Key("np-tab-" + label))
+			button.Grow(1).Basis(0).MinWidth(0).Height(40).PaddingX(4).Center().Radius(m3.Full).
+				Cursor(ui.CursorPointer).Label(label).Tooltip(label).
+				Background(m3.StateFill(container, content, button.Hovered(), button.Pressed(), button.FocusVisible()))
+			button.Children(func() {
+				text := m3.Text(c, m3.LabelMedium, label).Grow(1).MinWidth(0).SingleLine().TextAlign(ui.Center).TextColor(content)
+				if selected {
+					text.FontWeight(600)
+				}
+			})
+			if button.Clicked() {
+				a.npTab = index
+			}
+		}
 	})
 }
 
 // queueView lists the tracks of the queue, with the current one picked out.
 func (a *app) queueView(c *ui.Context) {
+	sc := m3.Active().Scheme
+	if a.queueSource != "" {
+		ui.Column(c).Padding(8, 16, 4).Gap(2).Children(func() {
+			m3.Text(c, m3.BodySmall, "Playing from").TextColor(sc.OnSurfaceVariant)
+			m3.EmphasizedText(c, m3.TitleSmall, a.queueSource).SingleLine()
+		})
+	}
+	ui.Row(c).Padding(8, 16, 4).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			m3.EmphasizedText(c, m3.TitleMedium, "Auto-play")
+			m3.Text(c, m3.BodySmall, "Add similar music when this queue ends.").TextColor(sc.OnSurfaceVariant).SingleLine()
+		})
+		on := a.settings.AutoPlay
+		if m3.Switch(c, &on, "Toggle auto-play").Changed() {
+			a.setAutoPlay(on)
+		}
+	})
+	if a.upNextLoading {
+		m3.Text(c, m3.BodySmall, "Finding recommendations…").Padding(0, 16, 4).TextColor(sc.OnSurfaceVariant)
+	} else if a.upNextErr != "" {
+		m3.Text(c, m3.BodySmall, "Recommendations aren't available right now.").Padding(0, 16, 4).TextColor(sc.Error)
+	}
 	if len(a.queue) == 0 {
 		a.message(c, m3.IconQueue, "The queue is empty", "", "", nil)
 		return
 	}
+	header := a.recommendationStart > 0 && a.recommendationStart < len(a.queue)
+	rowCount := len(a.queue)
+	if header {
+		rowCount++
+	}
+	itemIndex := func(row int) (int, bool) {
+		if header && row == a.recommendationStart {
+			return 0, false
+		}
+		if header && row > a.recommendationStart {
+			row--
+		}
+		return row, row >= 0 && row < len(a.queue)
+	}
 	// A press in a row can replace the queue while the list still asks about
 	// a row of the one before.
-	a.queueList.Key = func(i int) any {
-		if i >= len(a.queue) {
+	a.queueList.Key = func(row int) any {
+		index, track := itemIndex(row)
+		if !track {
+			if header && row == a.recommendationStart {
+				return "queue-recommendations"
+			}
 			return nil
 		}
-		return itemKey("queue", a.queue[i]) + "#" + strconv.Itoa(i)
+		return itemKey("queue", a.queue[index]) + "#" + strconv.Itoa(index)
 	}
-	a.queueList.Label = func(i int) string {
-		if i >= len(a.queue) {
+	a.queueList.Label = func(row int) string {
+		index, track := itemIndex(row)
+		if !track {
+			if header && row == a.recommendationStart {
+				return "Auto-play recommendations"
+			}
 			return ""
 		}
-		return a.queue[i].Title
+		return a.queue[index].Title
 	}
 	if a.queueFollow != a.current.VideoID {
 		a.queueFollow = a.current.VideoID
-		a.queueList.ScrollTo(a.index, ui.Start)
+		follow := a.index
+		if header && follow >= a.recommendationStart {
+			follow++
+		}
+		a.queueList.ScrollTo(follow, ui.Start)
 	}
-	ui.List(c, &a.queueList, len(a.queue), func(i int) {
-		a.songRow(c, a.queue[i], a.queue, songOptions{})
+	ui.List(c, &a.queueList, rowCount, func(row int) {
+		index, track := itemIndex(row)
+		if !track {
+			ui.Column(c).Height(48).Padding(8, 16, 0).Gap(8).Children(func() {
+				ui.Divider(c)
+				m3.EmphasizedText(c, m3.TitleSmall, "Recommended").TextColor(sc.OnSurfaceVariant).SingleLine()
+			})
+			return
+		}
+		a.songRow(c, a.queue[index], a.queue, songOptions{directQueue: true, source: a.queueSource})
 	}).Grow(1).Padding(0, 8, 16)
+}
+
+func (a *app) relatedView(c *ui.Context) {
+	a.loadRelated()
+	switch {
+	case a.related.loading:
+		ui.Column(c).Grow(1).Center().Children(func() { m3.LoadingIndicator(c, 56, true) })
+	case a.related.err != "":
+		a.message(c, m3.IconExplore, a.related.err, "", "", nil)
+	default:
+		a.relatedList.Key = func(i int) any {
+			if i >= len(a.related.items) {
+				return nil
+			}
+			return itemKey("related", a.related.items[i]) + "#" + strconv.Itoa(i)
+		}
+		a.relatedList.Label = func(i int) string {
+			if i >= len(a.related.items) {
+				return ""
+			}
+			return a.related.items[i].Title
+		}
+		ui.List(c, &a.relatedList, len(a.related.items), func(i int) {
+			a.songRow(c, a.related.items[i], a.related.items, songOptions{directQueue: true, source: "Related"})
+		}).Grow(1).Padding(0, 8, 16)
+	}
 }
 
 // lyricsView shows the lyrics of the track playing, loading them as the tab

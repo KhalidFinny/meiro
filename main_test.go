@@ -209,6 +209,47 @@ func TestVideoPlaybackShowsBadgeOnPlayerArtwork(t *testing.T) {
 	}
 }
 
+func TestUpNextShowsAutoplayStateAndRecommendationSection(t *testing.T) {
+	a := newTestApp()
+	a.current = youtube.MusicItem{VideoID: "current", Title: "Current song"}
+	a.queue = []youtube.MusicItem{
+		{VideoID: "current", Title: "Current song"},
+		{VideoID: "chosen-next", Title: "Chosen next"},
+		{VideoID: "recommended", Title: "Recommended song"},
+	}
+	a.index, a.recommendationStart, a.queueSource = 1, 2, "My playlist"
+	a.location, a.npOpen = "/home", true
+	tt := ui.NewTester(a.view, 1180, 760)
+	for _, label := range []string{"Playing from", "My playlist", "Auto-play", "Add similar music when this queue ends.", "Recommended", "Recommended song"} {
+		if !tt.HasText(label) {
+			t.Errorf("Up next panel is missing %q: %q", label, tt.Texts())
+		}
+	}
+	if err := tt.Click("Toggle auto-play"); err != nil {
+		t.Fatal(err)
+	}
+	if a.settings.AutoPlay {
+		t.Fatal("the Auto-play switch did not turn autoplay off")
+	}
+	if _, ok := a.nextIndex(); ok {
+		t.Errorf("turning autoplay off left a generated recommendation playable")
+	}
+}
+
+func TestRelatedTabShowsRelatedTracks(t *testing.T) {
+	a := newTestApp()
+	a.current = youtube.MusicItem{VideoID: "current", Title: "Current song"}
+	a.related = relatedState{
+		videoID: "current",
+		items:   []youtube.MusicItem{{VideoID: "related", Title: "Related song", Kind: "track"}},
+	}
+	a.location, a.npOpen, a.npTab = "/home", true, 2
+	tt := ui.NewTester(a.view, 1180, 760)
+	if !tt.HasText("Related") || !tt.HasText("Related song") {
+		t.Fatalf("related tab did not show its tracks: %q", tt.Texts())
+	}
+}
+
 func TestShuffleAndRepeatChooseTheNextTrack(t *testing.T) {
 	a := newTestApp()
 	a.queue = []youtube.MusicItem{{VideoID: "a"}, {VideoID: "b"}, {VideoID: "c"}}

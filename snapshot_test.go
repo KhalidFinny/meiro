@@ -216,6 +216,18 @@ func TestSnapshots(t *testing.T) {
 	save(t, tt, "now-playing-lyrics")
 
 	a, tt = newShotApp("/home", false)
+	play(a)
+	a.queue = songs("qp", "Glass Hours", "Slow Burn", "Paper Lanterns", "Static Bloom", "Midnight Cartography")
+	a.recommendationStart, a.queueSource = 3, "zoo / Ilios"
+	a.npOpen = true
+	tt.Frame()
+	save(t, tt, "now-playing-autoplay")
+	a.npTab = 2
+	a.related = relatedState{videoID: a.current.VideoID, items: songs("related", "Paper Lanterns", "Salt & Honey", "Afterimage")}
+	tt.Frame()
+	save(t, tt, "now-playing-related")
+
+	a, tt = newShotApp("/home", false)
 	tt.SetSize(860, 560)
 	play(a)
 	tt.Frame()

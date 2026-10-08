@@ -242,7 +242,9 @@ type songOptions struct {
 	number int
 	// inset puts the row in from the edges of the page, as the rows of a
 	// page of songs are; rows in a shelf sit flush.
-	inset bool
+	inset       bool
+	directQueue bool
+	source      string
 }
 
 // songRow shows a song, an album, an artist or a playlist as a row: artwork,
@@ -312,13 +314,25 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 		})
 		switch {
 		case item.Duration != "":
-			m3.Text(c, m3.BodyMedium, item.Duration).TextColor(subColour).Shrink(0).FontFeatures("tnum")
+			m3.Text(c, m3.BodyMedium, item.Duration).SingleLine().Width(48).TextAlign(ui.End).
+				TextColor(subColour).Shrink(0).FontFeatures("tnum")
 		case !isSong:
 			ui.Icon(c, m3.IconChevronRight).FontSize(24).TextColor(sc.OnSurfaceVariant)
 		}
 	})
 	if row.Clicked() {
-		a.activate(item, queue)
+		if o.directQueue {
+			index := 0
+			for i := range queue {
+				if queue[i].VideoID == item.VideoID {
+					index = i
+					break
+				}
+			}
+			a.playWithOptions(item, queue, index, youtube.UpNextOptions{}, o.source)
+		} else {
+			a.activate(item, queue)
+		}
 	}
 }
 
