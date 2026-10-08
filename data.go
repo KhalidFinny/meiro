@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -192,6 +193,9 @@ func (a *app) fetch(load func(ctx context.Context) (*youtube.BrowseResult, error
 	ctx := a.jobContext()
 	a.run(func() {
 		result, err := load(ctx)
+		// A page is parsed into much more garbage than it keeps, and the
+		// runtime would sit on that memory for a while.
+		defer debug.FreeOSMemory()
 		a.update(func() {
 			if job != a.job {
 				return

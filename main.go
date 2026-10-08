@@ -13,6 +13,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -139,6 +140,11 @@ func newApp() *app {
 }
 
 func main() {
+	// The heap is mostly artwork, which lives as long as the user browses and
+	// then goes at once. The default lets the heap grow to twice what is live
+	// before a collection; half as much costs a little time and saves tens of
+	// megabytes.
+	debug.SetGCPercent(50)
 	a := newApp()
 	mygo.App.WhenReady(func() {
 		a.setup()
