@@ -53,10 +53,11 @@ go tool mygo dev
 ## Sign in
 
 Choose **Sign in with Google**. The dialog shows a code: open the page it
-links to and enter the code there. Meiro saves the tokens in the
-application's data directory, with permissions for your user only, so the
-next start is already signed in. **Sign out** removes them, here and at
-Google.
+links to and enter the code there. Meiro keeps the tokens in your login
+keychain on macOS, through the `security` tool, and in the Secret Service
+on Linux, through `secret-tool`, so the next start is already signed in. A
+system with neither keeps them in a file in the app's data directory that
+only your user can read. **Sign out** removes them, here and at Google.
 
 ## Test and build
 
@@ -65,11 +66,13 @@ go test ./...
 go tool mygo build
 ```
 
-Every test but two runs without the network. The live ones resolve and play
-a real track, which also needs `ffmpeg` and `yt-dlp`:
+Almost every test runs without the network. Three are held back behind an
+environment variable: they play a real track, which also needs `ffmpeg` and
+`yt-dlp`, and write to your own keychain.
 
 ```sh
 MEIRO_LIVE_PLAYBACK=1 go test -run TestLivePlayback -v ./...
+MEIRO_LIVE_KEYCHAIN=1 go test -run TestLiveKeychain -v .
 ```
 
 ## Packages
@@ -120,8 +123,8 @@ The client does not make playlist or account changes.
 For sign-in across app restarts, provide an implementation of
 `youtube.TokenStore`. `OAuth.Restore` loads saved tokens, and device login
 and token refresh save them through that store. Meiro implements the store
-as a file only its user can read; a keychain-backed store is the stronger
-choice where one is available.
+with the system's credential store, and falls back to a file only its user
+can read where the system has none.
 
 Cookie auth can list all channels available to the account. OAuth returns
 only the active channel. Cookies are sensitive credentials; do not log them

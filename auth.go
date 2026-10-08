@@ -2,68 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/elianiva/meiro/youtube"
 )
-
-// tokenStore keeps the OAuth tokens in the application's data directory.
-// YouTube rotates the access token often; the refresh token in the same
-// record is what keeps the user signed in across restarts.
-type tokenStore struct {
-	path string
-}
-
-// newTokenStore names the file the tokens live in. The application must be
-// ready, so that its data directory is known.
-func newTokenStore() (*tokenStore, error) {
-	dir, err := mygo.App.Path(mygo.PathUserData)
-	if err != nil {
-		return nil, err
-	}
-	return &tokenStore{path: filepath.Join(dir, "auth.json")}, nil
-}
-
-func (s *tokenStore) Load(context.Context) (youtube.Tokens, error) {
-	data, err := os.ReadFile(s.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return youtube.Tokens{}, youtube.ErrNoStoredTokens
-	}
-	if err != nil {
-		return youtube.Tokens{}, err
-	}
-	var tokens youtube.Tokens
-	if err := json.Unmarshal(data, &tokens); err != nil {
-		return youtube.Tokens{}, err
-	}
-	return tokens, nil
-}
-
-func (s *tokenStore) Save(_ context.Context, tokens youtube.Tokens) error {
-	data, err := json.Marshal(tokens)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
-	}
-	// The refresh token is a credential: keep it readable by this user only.
-	return os.WriteFile(s.path, data, 0o600)
-}
-
-func (s *tokenStore) Delete(context.Context) error {
-	if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
-}
 
 // signInState is the Google sign-in the user is going through, if any.
 type signInState struct {

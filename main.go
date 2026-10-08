@@ -34,7 +34,7 @@ type app struct {
 	public   *youtube.Client
 	authed   *youtube.Client
 	oauth    *youtube.OAuth
-	store    *tokenStore
+	store    youtube.TokenStore
 	account  youtube.AccountDetails
 	signedIn bool
 	signIn   signInState
