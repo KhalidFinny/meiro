@@ -74,24 +74,40 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 out="resources/${platform}"
-rm -rf "$out/bin" "$out/licenses"
 mkdir -p "$out/bin" "$out/licenses"
+
+# cached reports whether the file at path already has the expected checksum,
+# so a tool that is already downloaded is not fetched again.
+cached() { # path expected
+	[[ -f "$1" ]] || return 1
+	[[ "$(sha256 "$1")" == "$2" ]]
+}
 
 echo "ffmpeg ${FFMPEG_VERSION} for ${platform}"
 archive="jellyfin-ffmpeg_${FFMPEG_VERSION}_portable_${ffmpeg_asset}-gpl.tar.xz"
-curl -fsSL -o "$work/ffmpeg.tar.xz" "${ffmpeg_url}/${archive}"
-verify "$work/ffmpeg.tar.xz" "$ffmpeg_sha256"
-tar -xJf "$work/ffmpeg.tar.xz" -C "$work" ffmpeg
-install -m 0755 "$work/ffmpeg" "$out/bin/ffmpeg"
-curl -fsSL -o "$out/licenses/ffmpeg-COPYING.GPLv3" \
-	"https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/v${FFMPEG_VERSION}/COPYING.GPLv3"
+if cached "$out/bin/ffmpeg" "$ffmpeg_sha256"; then
+	echo "  already downloaded"
+else
+	curl -fsSL -o "$work/ffmpeg.tar.xz" "${ffmpeg_url}/${archive}"
+	verify "$work/ffmpeg.tar.xz" "$ffmpeg_sha256"
+	tar -xJf "$work/ffmpeg.tar.xz" -C "$work" ffmpeg
+	install -m 0755 "$work/ffmpeg" "$out/bin/ffmpeg"
+fi
+if [[ ! -f "$out/licenses/ffmpeg-COPYING.GPLv3" ]]; then
+	curl -fsSL -o "$out/licenses/ffmpeg-COPYING.GPLv3" \
+		"https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/v${FFMPEG_VERSION}/COPYING.GPLv3"
+fi
 
 echo "yt-dlp ${YT_DLP_VERSION} for ${platform}"
 curl -fsSL -o "$work/SHA2-256SUMS" "${ytdlp_url}/SHA2-256SUMS"
-curl -fsSL -o "$work/yt-dlp" "${ytdlp_url}/${ytdlp_asset}"
 expected="$(awk -v name="$ytdlp_asset" '$2 == name || $2 == "*" name { print $1 }' "$work/SHA2-256SUMS")"
 [[ -n "$expected" ]] || { printf 'No checksum for %s\n' "$ytdlp_asset" >&2; exit 1; }
-verify "$work/yt-dlp" "$expected"
-install -m 0755 "$work/yt-dlp" "$out/bin/yt-dlp"
+if cached "$out/bin/yt-dlp" "$expected"; then
+	echo "  already downloaded"
+else
+	curl -fsSL -o "$work/yt-dlp" "${ytdlp_url}/${ytdlp_asset}"
+	verify "$work/yt-dlp" "$expected"
+	install -m 0755 "$work/yt-dlp" "$out/bin/yt-dlp"
+fi
 
 echo "ready in ${out}"
