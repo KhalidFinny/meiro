@@ -677,7 +677,7 @@ func extractMusicSections(root any, keep bool) []MusicSection {
 		case map[string]any:
 			for _, key := range sortedKeys(node) {
 				child := node[key]
-				if key == "musicShelfRenderer" || key == "musicPlaylistShelfRenderer" || key == "gridRenderer" || key == "musicCarouselShelfRenderer" {
+				if key == "musicShelfRenderer" || key == "musicPlaylistShelfRenderer" || key == "playlistVideoListRenderer" || key == "gridRenderer" || key == "musicCarouselShelfRenderer" {
 					if renderer, ok := child.(map[string]any); ok {
 						section := MusicSection{
 							Title: rendererTitle(renderer), Kind: key,
@@ -875,7 +875,7 @@ func rendererKind(key string) (string, bool) {
 	case "videoRenderer":
 		return "video", true
 	case "playlistVideoRenderer", "playlistPanelVideoRenderer":
-		return "track", true
+		return "video", true
 	case "gridPlaylistRenderer":
 		return "playlist", true
 	case "gridAlbumRenderer":

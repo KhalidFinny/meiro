@@ -164,6 +164,19 @@ func TestSnapshots(t *testing.T) {
 	tt.Frame()
 	save(t, tt, "album-light")
 
+	a, tt = newShotApp("/playlist/VLPL_video", false)
+	a.detail = detail{title: "Video playlist", subtitle: "A playlist with videos", kind: pagePlaylist}
+	a.feed = pageState{sections: []youtube.MusicSection{{
+		Kind: "playlistVideoListRenderer",
+		Items: []youtube.MusicItem{{
+			ID: "playlist-video", VideoID: "playlist-video", Kind: "video", Title: "Playlist video",
+			Subtitle: "Aurora Vale • Live", Duration: "5:21", Thumbnail: "https://art.test/video/playlist",
+		}},
+	}}}
+	tt.SetSize(1600, 1000)
+	tt.Frame()
+	save(t, tt, "playlist-video")
+
 	a, tt = newShotApp("/search", false)
 	a.settings.Recent = []string{"ambient focus", "lofi beats", "aurora vale"}
 	tt.Frame()

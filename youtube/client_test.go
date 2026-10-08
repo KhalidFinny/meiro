@@ -291,7 +291,7 @@ func TestPlaylistAndUpNextAreReadOnlyBrowseCalls(t *testing.T) {
 			if request["browseId"] != "VLPL123" {
 				t.Errorf("playlist browse ID = %v", request["browseId"])
 			}
-			_, _ = w.Write([]byte(`{"contents":{"playlistVideoRenderer":{"videoId":"playlist-track","title":{"simpleText":"Playlist song"},"lengthText":{"simpleText":"2:58"}}}}`))
+			_, _ = w.Write([]byte(`{"contents":{"playlistVideoListRenderer":{"contents":[{"playlistVideoRenderer":{"videoId":"playlist-track","title":{"simpleText":"Playlist song"},"lengthText":{"simpleText":"2:58"}}}]}}}`))
 		case "/youtubei/v1/next":
 			if request["videoId"] != "playlist-track" {
 				t.Errorf("up-next video ID = %v", request["videoId"])
@@ -307,8 +307,11 @@ func TestPlaylistAndUpNextAreReadOnlyBrowseCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(playlist.Items) != 1 || playlist.Items[0].VideoID != "playlist-track" || playlist.Items[0].Title != "Playlist song" {
+	if len(playlist.Items) != 1 || playlist.Items[0].VideoID != "playlist-track" || playlist.Items[0].Title != "Playlist song" || playlist.Items[0].Kind != "video" {
 		t.Errorf("playlist items = %#v", playlist.Items)
+	}
+	if len(playlist.Sections) != 1 || playlist.Sections[0].Kind != "playlistVideoListRenderer" || len(playlist.Sections[0].Items) != 1 {
+		t.Errorf("playlist sections = %#v", playlist.Sections)
 	}
 	next, err := client.GetUpNext(context.Background(), "playlist-track")
 	if err != nil {

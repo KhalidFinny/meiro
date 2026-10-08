@@ -44,6 +44,8 @@ func (fakeMusic) RoundTrip(request *http.Request) (*http.Response, error) {
 		reply = `var a = 1; signatureTimestamp: 12345, b = 2;`
 	case strings.Contains(asked, "FEmusic_explore"):
 		reply = exploreResponse
+	case strings.Contains(asked, "VLPL_video"):
+		reply = playlistResponse
 	case strings.Contains(asked, "MPREb_test"):
 		reply = albumResponse
 	case strings.Contains(asked, `"query"`):
@@ -112,6 +114,21 @@ func TestOpeningAnAlbumFromTheHomePage(t *testing.T) {
 	}
 	if a.router.Path() != "/home" {
 		t.Errorf("going back led to %q", a.router.Path())
+	}
+}
+
+func TestPlaylistListsAndQueuesVideoEntries(t *testing.T) {
+	a := newTestApp()
+	path := "/playlist/VLPL_video"
+	a.details[path] = detail{title: "Video playlist", kind: pagePlaylist}
+	a.router.Push(path)
+	tt := ui.NewTester(a.view, 1000, 700)
+
+	if !tt.HasText("Playlist video") {
+		t.Fatalf("the playlist did not list its video: %q", tt.Texts())
+	}
+	if len(a.playable) != 1 || a.playable[0].VideoID != "playlist-video" || !isVideo(a.playable[0]) {
+		t.Errorf("playlist queue = %#v, want its video entry", a.playable)
 	}
 }
 
@@ -431,6 +448,10 @@ const albumResponse = `{"contents":{"musicShelfRenderer":{"contents":[
 			{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Someone"},{"text":" • "},{"text":"4:12"}]}}}
 		]
 	}}
+]}}}`
+
+const playlistResponse = `{"contents":{"playlistVideoListRenderer":{"contents":[
+	{"playlistVideoRenderer":{"videoId":"playlist-video","title":{"simpleText":"Playlist video"},"lengthText":{"simpleText":"5:21"}}}
 ]}}}`
 
 const searchResponse = `{"contents":{"musicShelfRenderer":{"contents":[
