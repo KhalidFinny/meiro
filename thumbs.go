@@ -24,6 +24,9 @@ import (
 // so the cache must not grow without end while the user browses.
 const thumbLimit = 400
 
+// thumbRetry is how long a failed download waits before the next try.
+const thumbRetry = 10 * time.Second
+
 // thumbCache downloads and decodes artwork, once for each URL.
 type thumbCache struct {
 	client *http.Client
@@ -37,7 +40,14 @@ type thumbCache struct {
 	colours map[string]ui.Color
 	order   []string
 	pending map[string]bool
-	failed  map[string]bool
+	// failed holds when each download last failed. A failure is only held
+	// for thumbRetry, so a dropped connection does not leave a cover blank
+	// for the rest of the session.
+	failed map[string]time.Time
+	// sizes remembers which sizes of each picture are in bitmaps, by the
+	// picture's URL without its size, so a small copy can stand in while a
+	// larger one downloads.
+	sizes map[string][]string
 }
 
 // newThumbCache returns a cache that calls notify when a bitmap lands, so
@@ -49,12 +59,14 @@ func newThumbCache(notify func()) *thumbCache {
 		bitmaps: make(map[string]*ui.Bitmap),
 		colours: make(map[string]ui.Color),
 		pending: make(map[string]bool),
-		failed:  make(map[string]bool),
+		failed:  make(map[string]time.Time),
+		sizes:   make(map[string][]string),
 	}
 }
 
-// bitmap returns the artwork at url, asked for at size pixels across, or nil
-// while it downloads or after it failed.
+// bitmap returns the artwork at url, asked for at size pixels across. While
+// it downloads, or after it failed, it returns another size of the same
+// picture when one is loaded, and nil otherwise.
 func (t *thumbCache) bitmap(url string, size int) *ui.Bitmap {
 	if url == "" {
 		return nil
@@ -68,11 +80,18 @@ func (t *thumbCache) bitmap(url string, size int) *ui.Bitmap {
 	if bitmap, ok := t.bitmaps[url]; ok {
 		return bitmap
 	}
-	if t.pending[url] || t.failed[url] {
-		return nil
+	if !t.pending[url] {
+		if failedAt, ok := t.failed[url]; !ok || time.Since(failedAt) > thumbRetry {
+			delete(t.failed, url)
+			t.pending[url] = true
+			go t.fetch(url)
+		}
 	}
-	t.pending[url] = true
-	go t.fetch(url)
+	for _, other := range t.sizes[sizeless(url)] {
+		if bitmap, ok := t.bitmaps[other]; ok {
+			return bitmap
+		}
+	}
 	return nil
 }
 
@@ -82,7 +101,9 @@ func (t *thumbCache) fetch(url string) {
 	var data []byte
 	if request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil); err == nil {
 		if response, err := t.client.Do(request); err == nil {
-			data, _ = io.ReadAll(io.LimitReader(response.Body, 8<<20))
+			if response.StatusCode >= 200 && response.StatusCode < 300 {
+				data, _ = io.ReadAll(io.LimitReader(response.Body, 8<<20))
+			}
 			response.Body.Close()
 		}
 	}
@@ -93,8 +114,10 @@ func (t *thumbCache) fetch(url string) {
 	t.mu.Lock()
 	delete(t.pending, url)
 	if bitmap == nil {
-		t.failed[url] = true
+		t.failed[url] = time.Now()
 		t.mu.Unlock()
+		// Draw again once the wait is over, so the next frame tries again.
+		time.AfterFunc(thumbRetry+time.Second, t.notify)
 		return
 	}
 	t.bitmaps[url] = bitmap
@@ -102,10 +125,25 @@ func (t *thumbCache) fetch(url string) {
 		t.colours[url] = colour
 	}
 	t.order = append(t.order, url)
+	base := sizeless(url)
+	t.sizes[base] = append(t.sizes[base], url)
 	for len(t.order) > thumbLimit {
-		delete(t.bitmaps, t.order[0])
-		delete(t.colours, t.order[0])
+		oldest := t.order[0]
+		delete(t.bitmaps, oldest)
+		delete(t.colours, oldest)
 		t.order = t.order[1:]
+		oldBase := sizeless(oldest)
+		kept := t.sizes[oldBase][:0]
+		for _, other := range t.sizes[oldBase] {
+			if other != oldest {
+				kept = append(kept, other)
+			}
+		}
+		if len(kept) == 0 {
+			delete(t.sizes, oldBase)
+		} else {
+			t.sizes[oldBase] = kept
+		}
 	}
 	t.mu.Unlock()
 	t.notify()
@@ -127,6 +165,14 @@ func thumbnailURL(url string, size int) string {
 		return thumbnailScalePattern.ReplaceAllString(url, "=s"+strconv.Itoa(size))
 	}
 	return url
+}
+
+// sizeless is url without the size Google's image host was asked for.
+func sizeless(url string) string {
+	if thumbnailSizePattern.MatchString(url) {
+		return thumbnailSizePattern.ReplaceAllString(url, "=")
+	}
+	return thumbnailScalePattern.ReplaceAllString(url, "=")
 }
 
 // colour returns the colour that stands out in the artwork at url, asked for
