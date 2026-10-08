@@ -479,3 +479,33 @@ func TestLoadPlayerKeepsTheScriptWhileTheIDHolds(t *testing.T) {
 		t.Errorf("new ID: player replaced = %v, scripts fetched = %d", next != first, scripts.Load())
 	}
 }
+
+func TestResultsDropRendererJSONUnlessKept(t *testing.T) {
+	page := `{"contents":{"musicCarouselShelfRenderer":{"header":{"musicCarouselShelfBasicHeaderRenderer":{"title":{"runs":[{"text":"Shelf"}]}}},"contents":[{"musicResponsiveListItemRenderer":{"videoId":"track-1","flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"First track"}]}}}]}}]}}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(page))
+	}))
+	defer server.Close()
+	for _, keep := range []bool{false, true} {
+		client := NewClient(Options{BaseURL: server.URL, APIKey: "key", KeepRenderers: keep})
+		result, err := client.GetHomeFeed(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Sections) != 1 || len(result.Sections[0].Items) != 1 || len(result.Items) != 1 {
+			t.Fatalf("keep=%v: sections = %#v, items = %#v", keep, result.Sections, result.Items)
+		}
+		item, section := result.Sections[0].Items[0], result.Sections[0]
+		if item.Title != "First track" || section.Title != "Shelf" {
+			t.Errorf("keep=%v: item %q in shelf %q", keep, item.Title, section.Title)
+		}
+		kept := len(item.Raw) > 0 && len(section.Raw) > 0 && len(result.Items[0].Raw) > 0
+		dropped := len(item.Raw) == 0 && len(section.Raw) == 0 && len(result.Items[0].Raw) == 0
+		if keep && !kept || !keep && !dropped {
+			t.Errorf("keep=%v: item raw %d, section raw %d, page item raw %d bytes", keep, len(item.Raw), len(section.Raw), len(result.Items[0].Raw))
+		}
+		if len(result.Raw) == 0 {
+			t.Errorf("keep=%v: the response itself should stay", keep)
+		}
+	}
+}

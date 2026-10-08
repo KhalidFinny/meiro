@@ -206,7 +206,13 @@ func (a *app) fetch(load func(ctx context.Context) (*youtube.BrowseResult, error
 				return
 			}
 			a.feed.sections = result.Sections
-			a.feed.items = result.Items
+			// Items are the page's songs, cards and rows all together, which
+			// its sections already hold; they are only a page by themselves
+			// when it has no sections.
+			a.feed.items = nil
+			if len(result.Sections) == 0 {
+				a.feed.items = result.Items
+			}
 			a.feed.more = result.ContinuationToken
 		})
 	})

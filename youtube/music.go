@@ -30,7 +30,8 @@ type SearchOptions struct {
 }
 
 // MusicItem is the common subset of YouTube Music song, video, album, artist,
-// and playlist renderers. Raw preserves the complete source renderer.
+// and playlist renderers. Raw preserves the complete source renderer when
+// Options.KeepRenderers is set, and is empty otherwise.
 type MusicItem struct {
 	ID         string          `json:"id,omitempty"`
 	VideoID    string          `json:"videoId,omitempty"`
@@ -177,7 +178,7 @@ func (c *Client) Search(ctx context.Context, query string, options SearchOptions
 		return nil, err
 	}
 	return &SearchResult{
-		Items: extractMusicItems(raw), ContinuationToken: continuationToken(raw), Raw: raw,
+		Items: c.trimItems(extractMusicItems(raw)), ContinuationToken: continuationToken(raw), Raw: raw,
 	}, nil
 }
 
@@ -254,7 +255,7 @@ func (c *Client) ContinueBrowse(ctx context.Context, token string) (*BrowseResul
 	if err != nil {
 		return nil, err
 	}
-	return newBrowseResult(raw), nil
+	return c.newBrowseResult(raw), nil
 }
 
 // ContinueSearch requests the next page from SearchResult.ContinuationToken.
@@ -267,7 +268,7 @@ func (c *Client) ContinueSearch(ctx context.Context, token string) (*SearchResul
 		return nil, err
 	}
 	return &SearchResult{
-		Items: extractMusicItems(raw), ContinuationToken: continuationToken(raw), Raw: raw,
+		Items: c.trimItems(extractMusicItems(raw)), ContinuationToken: continuationToken(raw), Raw: raw,
 	}, nil
 }
 
@@ -362,7 +363,7 @@ func (c *Client) GetAccountSettings(ctx context.Context) (*BrowseResult, error) 
 	if err != nil {
 		return nil, err
 	}
-	return newBrowseResult(raw), nil
+	return c.newBrowseResult(raw), nil
 }
 
 // GetTrackInfo fetches playback metadata and streaming formats. It does not
@@ -466,7 +467,7 @@ func (c *Client) GetUpNext(ctx context.Context, videoID string) (*BrowseResult, 
 	if err != nil {
 		return nil, err
 	}
-	return newBrowseResult(raw), nil
+	return c.newBrowseResult(raw), nil
 }
 
 // GetSearchSuggestions retrieves suggestion content for a partial query.
@@ -498,7 +499,7 @@ func (c *Client) GetRelated(ctx context.Context, videoID string) (*BrowseResult,
 	if err != nil {
 		return nil, err
 	}
-	return newBrowseResult(raw), nil
+	return c.newBrowseResult(raw), nil
 }
 
 // GetRecap loads the listening-review page for the signed-in account.
@@ -589,11 +590,37 @@ func findRenderer(raw json.RawMessage, rendererName string) map[string]any {
 	return walk(root)
 }
 
-func newBrowseResult(raw json.RawMessage) *BrowseResult {
+func (c *Client) newBrowseResult(raw json.RawMessage) *BrowseResult {
 	return &BrowseResult{
-		Items: extractMusicItems(raw), Sections: extractMusicSections(raw),
+		Items: c.trimItems(extractMusicItems(raw)), Sections: c.trimSections(extractMusicSections(raw)),
 		ContinuationToken: continuationToken(raw), Pages: []json.RawMessage{raw}, Raw: raw,
 	}
+}
+
+// trimItems drops the renderer JSON of each item, unless the client was asked
+// to keep it. It is the same data the item's other fields were read from, and
+// a list of a few hundred items holds hundreds of kilobytes of it.
+func (c *Client) trimItems(items []MusicItem) []MusicItem {
+	if c.keepRenderers {
+		return items
+	}
+	for i := range items {
+		items[i].Raw = nil
+	}
+	return items
+}
+
+// trimSections is trimItems for the items of each section, and for the
+// sections' own renderers, which hold every one of those items again.
+func (c *Client) trimSections(sections []MusicSection) []MusicSection {
+	if c.keepRenderers {
+		return sections
+	}
+	for i := range sections {
+		sections[i].Raw = nil
+		c.trimItems(sections[i].Items)
+	}
+	return sections
 }
 
 func browseContinuations(result *BrowseResult) []string {

@@ -61,6 +61,11 @@ type Options struct {
 	// PlayerPoToken supplies an optional precomputed playback PO token.
 	PlayerPoToken string
 	CookieAuth    *CookieAuth
+	// KeepRenderers keeps the renderer JSON in MusicItem.Raw and
+	// MusicSection.Raw. It is dropped by default: the result's own Raw still
+	// holds the whole response, but the items a caller keeps around for as
+	// long as a page is open should not each carry a copy of theirs.
+	KeepRenderers bool
 }
 
 // Client issues read-only YouTube Music requests.
@@ -77,6 +82,7 @@ type Client struct {
 	country          string
 	playerPoToken    string
 	cookieAuth       *CookieAuth
+	keepRenderers    bool
 
 	configMu sync.Mutex
 	playerMu sync.Mutex
@@ -124,6 +130,7 @@ func NewClient(options Options) *Client {
 		country:          options.Country,
 		playerPoToken:    options.PlayerPoToken,
 		cookieAuth:       options.CookieAuth,
+		keepRenderers:    options.KeepRenderers,
 	}
 }
 
@@ -284,5 +291,5 @@ func (c *Client) browse(ctx context.Context, browseID string) (*BrowseResult, er
 	if err != nil {
 		return nil, err
 	}
-	return newBrowseResult(raw), nil
+	return c.newBrowseResult(raw), nil
 }
