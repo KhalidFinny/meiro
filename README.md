@@ -86,7 +86,7 @@ fmt.Printf("Found %d accounts\n", len(accounts.Items))
 go tool mygo dev
 ```
 
-Use `+` and `−` to change the count. The app is native Go UI; it does not need Bun or a web frontend.
+Use `+` and `−` to change the count.
 
 ## Test and build
 
@@ -95,4 +95,12 @@ go test ./...
 go tool mygo build
 ```
 
-The app needs Go 1.27.1 and GTK 3 on Linux. In an Amp orb, `.agents/setup` installs the pinned Go toolchain and GTK 3 runtime.
+## Requirements
+
+This module requires Go 1.27.1 or later. The counter uses MyGo's native UI, so it does not need Bun or a web frontend.
+
+On macOS 12 or later, MyGo draws the native UI with Metal and needs no additional system libraries. Install [Go](https://go.dev/dl/) on macOS. `.agents/setup` only covers Linux.
+
+On Linux, the app needs GTK 3. In an Amp orb, `.agents/setup` installs GTK 3 and the pinned Go 1.27.1 toolchain.
+
+See the MyGo [getting started guide](https://mygo.egoist.dev/docs/getting-started) for platform requirements and the [native UI guide](https://mygo.egoist.dev/docs/ui) for how MyGo draws the interface.
