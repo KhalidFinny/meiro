@@ -15,6 +15,10 @@ import (
 
 const playerCacheTTL = 5 * time.Minute
 
+// maxScriptBytes is the most of the player script, which is a few megabytes,
+// the client will read.
+const maxScriptBytes = 16 << 20
+
 var (
 	playerIDPattern        = regexp.MustCompile(`player/([A-Za-z0-9._-]+)/`)
 	playerTimestampPattern = regexp.MustCompile(`signatureTimestamp\s*:\s*(\d+)`)
@@ -99,9 +103,14 @@ func (c *Client) getText(ctx context.Context, endpoint string) ([]byte, error) {
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, responseError("load player metadata", response)
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, 8<<20))
+	// One byte more than the limit tells a script that fits from one that was
+	// cut short, which would only fail later as something not found in it.
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxScriptBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxScriptBytes {
+		return nil, fmt.Errorf("%s is larger than %d bytes", endpoint, maxScriptBytes)
 	}
 	return body, nil
 }

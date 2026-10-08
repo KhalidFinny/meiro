@@ -6,7 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/pbkdf2"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // Chromium derives its cookie key with PBKDF2-HMAC-SHA1
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -148,7 +148,7 @@ func readChromiumCookies(ctx context.Context, profile string, aesKey []byte) (st
 func chromiumKey(ctx context.Context, key keychainKey) ([]byte, error) {
 	out, err := exec.CommandContext(ctx, "security", "find-generic-password", "-w", "-s", key.service, "-a", key.account).Output()
 	if err != nil {
-		return nil, errors.New("the keychain did not give the browser's key: " + err.Error())
+		return nil, fmt.Errorf("the keychain did not give the browser's key: %w", err)
 	}
 	return deriveChromiumKey(strings.TrimRight(string(out), "\n"))
 }

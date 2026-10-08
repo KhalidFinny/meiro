@@ -43,15 +43,23 @@ var (
 	playerSignatureFunctionPattern = regexp.MustCompile(`(?s)function(?:\s+` + jsIdentifierPattern + `)?\(a\)\{a\s*=\s*a\.split\(""\);(.*?)return\s+a\.join\(""\)\}`)
 	playerOperationCallPattern     = regexp.MustCompile(`(?:a\s*=\s*)?(` + jsIdentifierPattern + `)\.(` + jsIdentifierPattern + `)\(a(?:\s*,\s*(\d+))?\)\s*;`)
 	playerNFunctionPattern         = regexp.MustCompile(`\.get\(\s*["']n["']\s*\)\s*\)\s*&&\s*\(b\s*=\s*([A-Za-z0-9$]{0,3})\s*\[\s*(\d+)\s*\](.+?)\|\|\s*([A-Za-z0-9$]{1,8})`)
-	playerTimeoutError             = errors.New("player decipher JavaScript timed out")
+	errPlayerTimeout               = errors.New("player decipher JavaScript timed out")
 )
 
 func newPlayerDecipher(source []byte) *playerDecipher {
 	return &playerDecipher{source: source}
 }
 
-func (streaming *StreamingData) resolveAudioFormats(ctx context.Context, decoder *playerDecipher, clientVersion, poToken, cpn string) {
-	nCache := make(map[string]string)
+// formatRequest is what a resolved URL carries besides what the format
+// gave: the client's version, the PO token and the playback ID, and the
+// answers already found for n parameters, which a response repeats across its
+// formats.
+type formatRequest struct {
+	clientVersion, poToken, cpn string
+	nCache                      map[string]string
+}
+
+func (streaming *StreamingData) resolveAudioFormats(ctx context.Context, decoder *playerDecipher, request formatRequest) {
 	for _, formats := range [][]AudioFormat{streaming.Formats, streaming.AdaptiveFormats} {
 		for index := range formats {
 			formats[index].ResolvedURL = ""
@@ -59,7 +67,7 @@ func (streaming *StreamingData) resolveAudioFormats(ctx context.Context, decoder
 			if formats[index].URL == "" && formats[index].SignatureCipher == "" && formats[index].Cipher == "" {
 				continue
 			}
-			resolved, err := decoder.resolveFormatURLForClientWithCacheAndCPN(ctx, formats[index], clientVersion, poToken, cpn, nCache)
+			resolved, err := decoder.resolveFormatURL(ctx, formats[index], request)
 			if err != nil {
 				formats[index].DecipherError = err.Error()
 				continue
@@ -69,15 +77,11 @@ func (streaming *StreamingData) resolveAudioFormats(ctx context.Context, decoder
 	}
 }
 
-func (decoder *playerDecipher) resolveFormatURL(ctx context.Context, format AudioFormat) (string, error) {
-	return decoder.resolveFormatURLForClient(ctx, format, "", "")
-}
-
-func (decoder *playerDecipher) resolveFormatURLForClient(ctx context.Context, format AudioFormat, clientVersion, poToken string) (string, error) {
-	return decoder.resolveFormatURLForClientWithCacheAndCPN(ctx, format, clientVersion, poToken, "", make(map[string]string))
-}
-
-func (decoder *playerDecipher) resolveFormatURLForClientWithCacheAndCPN(ctx context.Context, format AudioFormat, clientVersion, poToken, cpn string, nCache map[string]string) (string, error) {
+func (decoder *playerDecipher) resolveFormatURL(ctx context.Context, format AudioFormat, request formatRequest) (string, error) {
+	nCache := request.nCache
+	if nCache == nil {
+		nCache = make(map[string]string)
+	}
 	streamURL := format.URL
 	var signatureCipher url.Values
 	cipherText := format.SignatureCipher
@@ -160,7 +164,7 @@ func (decoder *playerDecipher) resolveFormatURLForClientWithCacheAndCPN(ctx cont
 		operations, err := decoder.getSignatureOperations()
 		if err != nil {
 			if nsigErr != nil {
-				return "", fmt.Errorf("decipher signature: %w (combined transform: %v)", err, nsigErr)
+				return "", fmt.Errorf("decipher signature: %w (combined transform: %w)", err, nsigErr)
 			}
 			return "", err
 		}
@@ -174,7 +178,7 @@ func (decoder *playerDecipher) resolveFormatURLForClientWithCacheAndCPN(ctx cont
 		function, err := decoder.getNFunction()
 		if err != nil {
 			if nsigErr != nil {
-				return "", fmt.Errorf("decipher n parameter: %w (combined transform: %v)", err, nsigErr)
+				return "", fmt.Errorf("decipher n parameter: %w (combined transform: %w)", err, nsigErr)
 			}
 			return "", err
 		}
@@ -185,14 +189,14 @@ func (decoder *playerDecipher) resolveFormatURLForClientWithCacheAndCPN(ctx cont
 		query.Set("n", decrypted)
 		nCache[encryptedN] = decrypted
 	}
-	if clientVersion != "" {
-		query.Set("cver", clientVersion)
+	if request.clientVersion != "" {
+		query.Set("cver", request.clientVersion)
 	}
-	if poToken != "" && query.Get("sabr") != "1" {
-		query.Set("pot", poToken)
+	if request.poToken != "" && query.Get("sabr") != "1" {
+		query.Set("pot", request.poToken)
 	}
-	if cpn != "" {
-		query.Set("cpn", cpn)
+	if request.cpn != "" {
+		query.Set("cpn", request.cpn)
 	}
 	parsedURL.RawQuery = query.Encode()
 	return parsedURL.String(), nil
@@ -371,11 +375,11 @@ func playerObjectBody(source []byte, name string) ([]byte, error) {
 		return nil, fmt.Errorf("player signature action object %q not found", name)
 	}
 	open := bytes.IndexByte(source[match[0]:match[1]], '{') + match[0]
-	close, err := matchingJavaScriptBrace(source, open)
+	end, err := matchingJavaScriptBrace(source, open)
 	if err != nil {
 		return nil, err
 	}
-	return source[open+1 : close], nil
+	return source[open+1 : end], nil
 }
 
 func matchingJavaScriptBrace(source []byte, open int) (int, error) {
@@ -477,11 +481,11 @@ func extractNamedFunction(source []byte, name string) (string, error) {
 	}
 	start := bytes.Index(source[match[0]:match[1]], []byte(name)) + match[0]
 	open := bytes.IndexByte(source[match[0]:], '{') + match[0]
-	close, err := matchingJavaScriptBrace(source, open)
+	end, err := matchingJavaScriptBrace(source, open)
 	if err != nil {
 		return "", err
 	}
-	return string(source[start : close+1]), nil
+	return string(source[start : end+1]), nil
 }
 
 func evaluatePlayerFunction(ctx context.Context, function, argument string) (string, error) {
@@ -492,7 +496,7 @@ func evaluatePlayerFunction(ctx context.Context, function, argument string) (str
 	functionExpression := strings.TrimSpace(function[equals+1:])
 	vm := goja.New()
 	stopContextInterrupt := context.AfterFunc(ctx, func() { vm.Interrupt(ctx.Err()) })
-	timer := time.AfterFunc(3*time.Second, func() { vm.Interrupt(playerTimeoutError) })
+	timer := time.AfterFunc(3*time.Second, func() { vm.Interrupt(errPlayerTimeout) })
 	defer stopContextInterrupt()
 	defer timer.Stop()
 	value, err := vm.RunString("var __youtubeN = (" + functionExpression + "); __youtubeN")
@@ -511,7 +515,7 @@ func evaluatePlayerFunction(ctx context.Context, function, argument string) (str
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		if errors.Is(err, playerTimeoutError) {
+		if errors.Is(err, errPlayerTimeout) {
 			return "", err
 		}
 		return "", fmt.Errorf("run player n transform: %w", err)

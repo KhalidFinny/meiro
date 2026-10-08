@@ -19,7 +19,7 @@ func TestResolveEncryptedAudioFormat(t *testing.T) {
 		"sp":  {"sig"},
 	}.Encode()
 	decoder := newPlayerDecipher(playerScript)
-	resolved, err := decoder.resolveFormatURL(context.Background(), AudioFormat{SignatureCipher: cipher})
+	resolved, err := decoder.resolveFormatURL(context.Background(), AudioFormat{SignatureCipher: cipher}, formatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestResolveDirectAudioFormatUnthrottlesN(t *testing.T) {
 	decoder := newPlayerDecipher(playerScript)
 	resolved, err := decoder.resolveFormatURL(context.Background(), AudioFormat{
 		URL: "https://stream.example/videoplayback?itag=140&n=throttled",
-	})
+	}, formatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestResolveCombinedPlayerTransform(t *testing.T) {
 		"s":   {"abcdef"},
 		"sp":  {"sig"},
 	}.Encode()
-	resolved, err := decoder.resolveFormatURL(context.Background(), AudioFormat{SignatureCipher: cipher})
+	resolved, err := decoder.resolveFormatURL(context.Background(), AudioFormat{SignatureCipher: cipher}, formatRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,9 +78,9 @@ func TestResolveCombinedPlayerTransform(t *testing.T) {
 
 func TestResolvedURLAddsClientVersionAndOptionalPoToken(t *testing.T) {
 	decoder := newPlayerDecipher(nil)
-	resolved, err := decoder.resolveFormatURLForClient(context.Background(), AudioFormat{
+	resolved, err := decoder.resolveFormatURL(context.Background(), AudioFormat{
 		URL: "https://stream.example/videoplayback?itag=140",
-	}, "1.2026.test", "po-token")
+	}, formatRequest{clientVersion: "1.2026.test", poToken: "po-token"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,9 +92,9 @@ func TestResolvedURLAddsClientVersionAndOptionalPoToken(t *testing.T) {
 		t.Errorf("resolved query = %#v", parsed.Query())
 	}
 
-	resolved, err = decoder.resolveFormatURLForClient(context.Background(), AudioFormat{
+	resolved, err = decoder.resolveFormatURL(context.Background(), AudioFormat{
 		URL: "https://stream.example/videoplayback?sabr=1",
-	}, "1.2026.test", "po-token")
+	}, formatRequest{clientVersion: "1.2026.test", poToken: "po-token"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestSignatureCipherWithoutSupportedPlayerTransform(t *testing.T) {
 		"url": {"https://stream.example/videoplayback"},
 		"s":   {"encrypted"},
 	}.Encode()
-	if _, err := decoder.resolveFormatURL(context.Background(), AudioFormat{SignatureCipher: cipher}); err == nil {
+	if _, err := decoder.resolveFormatURL(context.Background(), AudioFormat{SignatureCipher: cipher}, formatRequest{}); err == nil {
 		t.Fatal("expected an unsupported player signature transform error")
 	}
 }

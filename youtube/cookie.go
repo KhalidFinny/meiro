@@ -1,7 +1,7 @@
 package youtube
 
 import (
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // SAPISIDHASH is defined as SHA-1
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -45,7 +45,7 @@ func NewCookieAuth(cookie string, options CookieOptions) (*CookieAuth, error) {
 }
 
 func cookieValue(cookie, name string) string {
-	for _, part := range strings.Split(cookie, ";") {
+	for part := range strings.SplitSeq(cookie, ";") {
 		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
 		if ok && key == name {
 			return strings.Trim(strings.TrimSpace(value), `"`)
@@ -57,6 +57,6 @@ func cookieValue(cookie, name string) string {
 func (auth *CookieAuth) authorization(at time.Time) string {
 	timestamp := at.Unix()
 	input := fmt.Sprintf("%d %s https://www.youtube.com", timestamp, auth.sapisid)
-	digest := sha1.Sum([]byte(input))
+	digest := sha1.Sum([]byte(input)) //nolint:gosec // SAPISIDHASH is defined as SHA-1
 	return fmt.Sprintf("SAPISIDHASH %d_%s", timestamp, hex.EncodeToString(digest[:]))
 }

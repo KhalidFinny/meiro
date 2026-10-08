@@ -14,7 +14,7 @@ func evaluatePlayerNSig(ctx context.Context, script string, query url.Values, si
 	vm := goja.New()
 	result := cloneURLValues(query)
 	searchParams := vm.NewObject()
-	methods := map[string]interface{}{
+	methods := map[string]any{
 		"get": func(call goja.FunctionCall) goja.Value {
 			value, ok := result[call.Argument(0).String()]
 			if !ok || len(value) == 0 {
@@ -77,7 +77,7 @@ func evaluatePlayerNSig(ctx context.Context, script string, query url.Values, si
 		return nil, fmt.Errorf("set player global object: %w", err)
 	}
 	stopContextInterrupt := context.AfterFunc(ctx, func() { vm.Interrupt(ctx.Err()) })
-	timer := time.AfterFunc(3*time.Second, func() { vm.Interrupt(playerTimeoutError) })
+	timer := time.AfterFunc(3*time.Second, func() { vm.Interrupt(errPlayerTimeout) })
 	defer stopContextInterrupt()
 	defer timer.Stop()
 	if _, err := vm.RunString(script); err != nil {
@@ -95,7 +95,7 @@ func evaluatePlayerNSig(ctx context.Context, script string, query url.Values, si
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if errors.Is(err, playerTimeoutError) {
+		if errors.Is(err, errPlayerTimeout) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("run player combined transform: %w", err)

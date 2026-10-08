@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,10 @@ const (
 	defaultMusicClient   = "YTMUSIC"
 	defaultMusicClientID = "67"
 )
+
+// maxResponseBytes is the most of an API response the client will read. The
+// biggest pages, a whole library, are a few megabytes.
+const maxResponseBytes = 64 << 20
 
 // browserUserAgent is the User-Agent the Music homepage needs to serve its
 // full page, which carries the InnerTube API key. Without it, YouTube
@@ -198,21 +203,30 @@ func (c *Client) ensureConfig(ctx context.Context) error {
 	return nil
 }
 
+// innerTubeClient is which of YouTube's clients a request speaks as.
+type innerTubeClient string
+
+const (
+	musicClient innerTubeClient = "YTMUSIC"
+	webClient   innerTubeClient = "WEB"
+	tvClient    innerTubeClient = "TV"
+)
+
 func (c *Client) execute(ctx context.Context, endpoint string, payload map[string]any) (json.RawMessage, error) {
-	return c.executeForClient(ctx, endpoint, payload, defaultMusicClient)
+	return c.executeForClient(ctx, endpoint, payload, musicClient)
 }
 
-func (c *Client) executeForClient(ctx context.Context, endpoint string, payload map[string]any, client string) (json.RawMessage, error) {
+func (c *Client) executeForClient(ctx context.Context, endpoint string, payload map[string]any, client innerTubeClient) (json.RawMessage, error) {
 	if err := c.ensureConfig(ctx); err != nil {
 		return nil, err
 	}
-	clientName, clientID, clientVersion := "", "", ""
+	var clientName, clientID, clientVersion string
 	switch client {
-	case "YTMUSIC":
+	case musicClient:
 		clientName, clientID, clientVersion = defaultMusicContext, defaultMusicClientID, c.clientVersion
-	case "WEB":
+	case webClient:
 		clientName, clientID, clientVersion = "WEB", "1", c.webClientVersion
-	case "TV":
+	case tvClient:
 		clientName, clientID, clientVersion = "TVHTML5", "7", c.tvClientVersion
 	default:
 		return nil, fmt.Errorf("youtube: unsupported InnerTube client %q", client)
@@ -224,8 +238,7 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 		requestContext.User = &clientUserContext{OnBehalfOfUser: c.cookieAuth.onBehalfOfUser}
 	}
 	payload["context"] = requestContext
-	delete(payload, "client")
-	if client == "YTMUSIC" {
+	if client == musicClient {
 		payload["isAudioOnly"] = true
 	}
 	body, err := json.Marshal(payload)
@@ -255,13 +268,13 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 	if c.visitorData != "" && c.cookieAuth == nil {
 		req.Header.Set("X-Goog-Visitor-Id", c.visitorData)
 	}
-	if client == "TV" {
+	if client == tvClient {
 		req.Header.Set("User-Agent", "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version")
 	}
 	if c.cookieAuth != nil {
 		req.Header.Set("Cookie", c.cookieAuth.cookie)
 		req.Header.Set("Authorization", c.cookieAuth.authorization(time.Now()))
-		req.Header.Set("X-Goog-Authuser", fmt.Sprint(c.cookieAuth.accountIndex))
+		req.Header.Set("X-Goog-Authuser", strconv.Itoa(c.cookieAuth.accountIndex))
 		if c.cookieAuth.onBehalfOfUser != "" {
 			req.Header.Set("X-Goog-PageId", c.cookieAuth.onBehalfOfUser)
 		}
@@ -275,7 +288,7 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 		return nil, responseError(endpoint, resp)
 	}
 	var result json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("youtube: decode %s response: %w", endpoint, err)
 	}
 	return result, nil

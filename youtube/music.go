@@ -298,7 +298,7 @@ func (c *Client) GetAccountDetails(ctx context.Context) (*AccountDetails, error)
 	if c.cookieAuth == nil {
 		return nil, errors.New("youtube: GetAccountDetails requires cookie authentication")
 	}
-	raw, err := c.executeForClient(ctx, "account/accounts_list", map[string]any{}, "TV")
+	raw, err := c.executeForClient(ctx, "account/accounts_list", map[string]any{}, tvClient)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +343,7 @@ func (c *Client) GetAccounts(ctx context.Context) (*AccountList, error) {
 	raw, err := c.executeForClient(ctx, "account/accounts_list", map[string]any{
 		"requestType":      "ACCOUNTS_LIST_REQUEST_TYPE_CHANNEL_SWITCHER",
 		"callCircumstance": "SWITCHING_USERS_FULL",
-	}, "WEB")
+	}, webClient)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +355,7 @@ func (c *Client) GetAccountSettings(ctx context.Context) (*BrowseResult, error) 
 	if c.cookieAuth == nil {
 		return nil, errors.New("youtube: GetAccountSettings requires cookie authentication")
 	}
-	raw, err := c.executeForClient(ctx, "browse", map[string]any{"browseId": "SPaccount_overview"}, "WEB")
+	raw, err := c.executeForClient(ctx, "browse", map[string]any{"browseId": "SPaccount_overview"}, webClient)
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +404,9 @@ func (c *Client) GetTrackInfo(ctx context.Context, videoID string) (*TrackInfo, 
 	if err != nil {
 		return nil, err
 	}
-	response.StreamingData.resolveAudioFormats(ctx, player.decipher(), c.clientVersion, c.playerPoToken, cpn)
+	response.StreamingData.resolveAudioFormats(ctx, player.decipher(), formatRequest{
+		clientVersion: c.clientVersion, poToken: c.playerPoToken, cpn: cpn, nCache: make(map[string]string),
+	})
 	return &TrackInfo{
 		VideoDetails:  response.VideoDetails,
 		StreamingData: response.StreamingData,
