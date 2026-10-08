@@ -517,6 +517,10 @@ func targetOf(item youtube.MusicItem) (kind, id string) {
 	return "", ""
 }
 
+func isVideo(item youtube.MusicItem) bool {
+	return item.Kind == "video"
+}
+
 // retry loads the page shown again.
 func (a *app) retry() {
 	if a.router.Path() == "/search" {

@@ -154,7 +154,11 @@ func (a *app) playerBar(c *ui.Context) {
 			Cursor(ui.CursorPointer).Label("Open the player").
 			Background(m3.StateFill(ui.Transparent, sc.OnSurface, info.Hovered(), info.Pressed(), info.FocusVisible()))
 		info.Children(func() {
-			m3.Art(c, a.thumbs.bitmap(a.current.Thumbnail, playerArt), 64, m3.Large)
+			m3.Art(c, a.thumbs.bitmap(a.current.Thumbnail, playerArt), 64, m3.Large, func() {
+				if isVideo(a.current) {
+					m3.VideoBadge(c, 64)
+				}
+			})
 			a.trackLine(c, m3.TitleSmall, m3.BodySmall).Grow(1)
 		})
 		if info.Clicked() {
@@ -234,7 +238,11 @@ func (a *app) nowPlayingMain(c *ui.Context, windowHeight float32) {
 	if windowHeight < 700 {
 		art := min(max(windowHeight-200, 160), 320)
 		ui.Row(c).Grow(1).MinWidth(0).Center().Gap(28).Children(func() {
-			artwork := m3.Art(c, a.thumbs.bitmap(a.current.Thumbnail, 512), art, m3.ExtraLarge)
+			artwork := m3.Art(c, a.thumbs.bitmap(a.current.Thumbnail, 512), art, m3.ExtraLarge, func() {
+				if isVideo(a.current) {
+					m3.VideoBadge(c, art)
+				}
+			})
 			m3.Elevation(artwork, 3)
 			ui.Column(c).Grow(1).MinWidth(260).MaxWidth(420).Gap(10).Children(controls)
 		})
@@ -242,7 +250,11 @@ func (a *app) nowPlayingMain(c *ui.Context, windowHeight float32) {
 	}
 	art := min(max(windowHeight-420, 300), 440)
 	ui.Column(c).Grow(1).MinWidth(0).Center().Gap(20).Children(func() {
-		artwork := m3.Art(c, a.thumbs.bitmap(a.current.Thumbnail, 640), art, m3.ExtraLargeInc+8)
+		artwork := m3.Art(c, a.thumbs.bitmap(a.current.Thumbnail, 640), art, m3.ExtraLargeInc+8, func() {
+			if isVideo(a.current) {
+				m3.VideoBadge(c, art)
+			}
+		})
 		m3.Elevation(artwork, 3)
 		ui.Column(c).Width(art).Gap(14).Children(controls)
 	})

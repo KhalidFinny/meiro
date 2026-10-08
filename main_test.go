@@ -176,6 +176,20 @@ func TestPlayerBarShowsTheCurrentTrack(t *testing.T) {
 	}
 }
 
+func TestVideoPlaybackShowsBadgeOnPlayerArtwork(t *testing.T) {
+	a := newTestApp()
+	a.current = youtube.MusicItem{VideoID: "video-1", Title: "Video track", Kind: "video"}
+	tt := ui.NewTester(a.view, 1000, 700)
+	if _, ok := tt.Find("Video"); !ok || !tt.HasText("VIDEO") {
+		t.Fatalf("video playback has no badge: %q", tt.Texts())
+	}
+	a.current.Kind = "track"
+	tt.Frame()
+	if _, ok := tt.Find("Video"); ok {
+		t.Errorf("audio-only track retained the video badge: %q", tt.Texts())
+	}
+}
+
 func TestShuffleAndRepeatChooseTheNextTrack(t *testing.T) {
 	a := newTestApp()
 	a.queue = []youtube.MusicItem{{VideoID: "a"}, {VideoID: "b"}, {VideoID: "c"}}
@@ -329,6 +343,7 @@ func TestTargetOfRoutesItemsToPages(t *testing.T) {
 		id   string
 	}{
 		{"song", youtube.MusicItem{VideoID: "abc"}, pageTrack, "abc"},
+		{"video", youtube.MusicItem{VideoID: "video-1", Kind: "video"}, pageTrack, "video-1"},
 		{"album", youtube.MusicItem{BrowseID: "MPREb_1"}, pageAlbum, "MPREb_1"},
 		{"artist", youtube.MusicItem{BrowseID: "UCabc"}, pageArtist, "UCabc"},
 		{"playlist", youtube.MusicItem{BrowseID: "VLPLabc"}, pagePlaylist, "VLPLabc"},

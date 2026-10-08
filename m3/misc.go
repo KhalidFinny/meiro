@@ -147,6 +147,22 @@ func Art(c *ui.Context, art *ui.Bitmap, size, radius float32, overlays ...func()
 	return box
 }
 
+// VideoBadge marks artwork for a video that is being played as audio.
+func VideoBadge(c *ui.Context, artSize float32) {
+	sc := Active().Scheme
+	inset := min(max(artSize*0.08, 6), 24)
+	available := artSize - inset*2
+	fontSize := min(max(available/5.8, 6), 13)
+	height := fontSize * 1.8
+	width := min(fontSize*5.8, available)
+	badge := ui.Box(c).Size(width, height).Attach(ui.AnchorTopLeft, ui.AnchorTopLeft).
+		Top(inset).Left(inset).Radius(Full).Background(sc.Scrim.Alpha(0.55)).Center().Label("Video")
+	badge.Children(func() {
+		LabelSmall.Style(ui.Text(c, "VIDEO"), true).Width(width).FontSize(fontSize).FixedLineHeight(height).
+			TextColor(ui.RGB(255, 255, 255)).TextAlign(ui.Center).SingleLine().Shrink(0)
+	})
+}
+
 // Avatar shows a person's picture, or the first letter of their name on a
 // tonal disc.
 func Avatar(c *ui.Context, name string, pic *ui.Bitmap, size float32) ui.Element {

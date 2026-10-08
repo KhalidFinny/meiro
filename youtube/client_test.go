@@ -70,6 +70,30 @@ func TestSearchUsesMusicContextAndMapsItems(t *testing.T) {
 	}
 }
 
+func TestVideoRenderersKeepTheirKindAndThumbnail(t *testing.T) {
+	client := NewClient(Options{})
+	result := client.newSearchResult(json.RawMessage(`{"contents":{"items":[
+		{"musicVideoRenderer":{"videoId":"music-video","title":{"simpleText":"Music video"},"thumbnail":{"thumbnails":[{"url":"https://img.example/music-video"}]}}},
+		{"videoRenderer":{"videoId":"regular-video","title":{"simpleText":"Regular video"},"thumbnail":{"thumbnails":[{"url":"https://img.example/regular-video"}]}}}
+	]}}`))
+	if len(result.Items) != 2 {
+		t.Fatalf("video search items = %#v", result.Items)
+	}
+	items := make(map[string]MusicItem, len(result.Items))
+	for _, item := range result.Items {
+		items[item.VideoID] = item
+	}
+	for id, thumbnail := range map[string]string{
+		"music-video":   "https://img.example/music-video",
+		"regular-video": "https://img.example/regular-video",
+	} {
+		item, ok := items[id]
+		if !ok || item.Kind != "video" || item.Thumbnail != thumbnail {
+			t.Errorf("video %q = %#v, want kind video and thumbnail %q", id, item, thumbnail)
+		}
+	}
+}
+
 func TestContinueSearchSendsContinuationToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request map[string]any

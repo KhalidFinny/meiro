@@ -203,6 +203,9 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 		radius := artRadius(item, m3.LargeIncreased)
 		opening := a.opening == itemKey("open", item)
 		m3.Art(c, a.thumbs.bitmap(item.Thumbnail, 320), cardArt, radius, func() {
+			if isVideo(item) {
+				m3.VideoBadge(c, cardArt)
+			}
 			if opening {
 				ui.Box(c).Size(40, 40).Radius(m3.Full).Center().Background(sc.PrimaryContainer).
 					Attach(ui.AnchorBottomRight, ui.AnchorBottomRight).Right(8).Bottom(8).Children(func() {
@@ -282,18 +285,20 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 			})
 		} else {
 			m3.Art(c, a.thumbs.bitmap(item.Thumbnail, 128), 48, artRadius(item, m3.Medium), func() {
-				if !isSong || !(playing || hovered) {
-					return
+				if isSong && (playing || hovered) {
+					ui.Box(c).Fill().Center().Background(sc.Scrim.Alpha(0.45)).Children(func() {
+						if playing && a.loading() {
+							m3.LoadingIndicatorIn(c, 24, ui.RGB(255, 255, 255))
+						} else if playing {
+							m3.Equalizer(c, 18, a.player.Playing(), ui.RGB(255, 255, 255))
+						} else {
+							ui.Icon(c, m3.IconPlay).FontSize(24).TextColor(ui.RGB(255, 255, 255))
+						}
+					})
 				}
-				ui.Box(c).Fill().Center().Background(sc.Scrim.Alpha(0.45)).Children(func() {
-					if playing && a.loading() {
-						m3.LoadingIndicatorIn(c, 24, ui.RGB(255, 255, 255))
-					} else if playing {
-						m3.Equalizer(c, 18, a.player.Playing(), ui.RGB(255, 255, 255))
-					} else {
-						ui.Icon(c, m3.IconPlay).FontSize(24).TextColor(ui.RGB(255, 255, 255))
-					}
-				})
+				if isVideo(item) {
+					m3.VideoBadge(c, 48)
+				}
 			})
 		}
 		ui.Column(c).Grow(1).MinWidth(0).Gap(0).Children(func() {

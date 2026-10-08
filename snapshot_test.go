@@ -143,6 +143,9 @@ func TestSnapshots(t *testing.T) {
 	play(a)
 	tt.Frame()
 	save(t, tt, "home-light-player")
+	a.current.Kind = "video"
+	tt.Frame()
+	save(t, tt, "home-light-video-player")
 
 	a, tt = newShotApp("/home", true)
 	play(a)
@@ -169,6 +172,13 @@ func TestSnapshots(t *testing.T) {
 	a.search.items = append(songs("sr", "Aurora", "Aurora Borealis", "Northern Aurora"), albums("sr", "Aurora Vale Live")...)
 	tt.Frame()
 	save(t, tt, "search-results")
+	a.search.kind = len(searchKinds) - 1
+	a.search.items = []youtube.MusicItem{{
+		ID: "video-1", VideoID: "video-1", Kind: "video", Title: "Aurora Vale — Live Session",
+		Subtitle: "Aurora Vale • Live", Duration: "12:34", Thumbnail: "https://art.test/video/live",
+	}}
+	tt.Frame()
+	save(t, tt, "search-video-result")
 
 	a, tt = newShotApp("/settings", false)
 	play(a)
@@ -184,6 +194,9 @@ func TestSnapshots(t *testing.T) {
 	a.npOpen = true
 	tt.Frame()
 	save(t, tt, "now-playing")
+	a.current.Kind = "video"
+	tt.Frame()
+	save(t, tt, "now-playing-video")
 	a.npTab = 1
 	a.lyrics = lyricsState{videoID: "qp-0", text: "Verse one\nSomething in the glass hours\nLight comes through the window\n\nChorus\nHold on to the slow burn"}
 	tt.Frame()
