@@ -100,6 +100,13 @@ type AccountList struct {
 	Raw   json.RawMessage  `json:"raw"`
 }
 
+// Lyrics contains the description shelf returned by YouTube Music for a track.
+type Lyrics struct {
+	Description string          `json:"description,omitempty"`
+	Footer      string          `json:"footer,omitempty"`
+	Raw         json.RawMessage `json:"raw"`
+}
+
 // TrackInfo contains player metadata and formats for one music track. URLs
 // that YouTube returns directly can be played by an audio player; encrypted
 // signatureCipher formats are exposed as-is and need player-script deciphering.
@@ -438,6 +445,118 @@ func (c *Client) GetSearchSuggestions(ctx context.Context, input string) (json.R
 		return nil, errors.New("youtube: suggestion input is required")
 	}
 	return c.execute(ctx, "music/get_search_suggestions", map[string]any{"input": input})
+}
+
+// GetLyrics loads the lyrics tab for a track. Availability depends on the
+// track and YouTube Music account/region.
+func (c *Client) GetLyrics(ctx context.Context, videoID string) (*Lyrics, error) {
+	raw, err := c.getTrackTab(ctx, videoID, "MUSIC_PAGE_TYPE_TRACK_LYRICS")
+	if err != nil {
+		return nil, err
+	}
+	lyrics := &Lyrics{Raw: raw}
+	if renderer := findRenderer(raw, "musicDescriptionShelfRenderer"); renderer != nil {
+		lyrics.Description = rendererText(renderer["description"])
+		lyrics.Footer = rendererText(renderer["footer"])
+	}
+	return lyrics, nil
+}
+
+// GetRelated loads the related music tab for a track.
+func (c *Client) GetRelated(ctx context.Context, videoID string) (*BrowseResult, error) {
+	raw, err := c.getTrackTab(ctx, videoID, "MUSIC_PAGE_TYPE_TRACK_RELATED")
+	if err != nil {
+		return nil, err
+	}
+	return newBrowseResult(raw), nil
+}
+
+// GetRecap loads the listening-review page for the signed-in account.
+func (c *Client) GetRecap(ctx context.Context) (*BrowseResult, error) {
+	return c.browse(ctx, "FEmusic_listening_review")
+}
+
+func (c *Client) getTrackTab(ctx context.Context, videoID, pageType string) (json.RawMessage, error) {
+	if strings.TrimSpace(videoID) == "" {
+		return nil, errors.New("youtube: video ID is required")
+	}
+	raw, err := c.execute(ctx, "next", map[string]any{"videoId": videoID})
+	if err != nil {
+		return nil, err
+	}
+	browseID := musicTabBrowseID(raw, pageType)
+	if browseID == "" {
+		return nil, fmt.Errorf("youtube: track response has no %s tab", pageType)
+	}
+	page, err := c.browse(ctx, browseID)
+	if err != nil {
+		return nil, err
+	}
+	return page.Raw, nil
+}
+
+func musicTabBrowseID(raw json.RawMessage, pageType string) string {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return ""
+	}
+	var walk func(any, []any) string
+	walk = func(value any, parents []any) string {
+		switch node := value.(type) {
+		case []any:
+			for _, child := range node {
+				if id := walk(child, parents); id != "" {
+					return id
+				}
+			}
+		case map[string]any:
+			if node["pageType"] == pageType {
+				for index := len(parents) - 1; index >= 0; index-- {
+					if id := navigationID(parents[index]); id != "" {
+						return id
+					}
+				}
+				return navigationID(node)
+			}
+			parents = append(parents, node)
+			for _, key := range sortedKeys(node) {
+				if id := walk(node[key], parents); id != "" {
+					return id
+				}
+			}
+		}
+		return ""
+	}
+	return walk(root, nil)
+}
+
+func findRenderer(raw json.RawMessage, rendererName string) map[string]any {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return nil
+	}
+	var walk func(any) map[string]any
+	walk = func(value any) map[string]any {
+		switch node := value.(type) {
+		case []any:
+			for _, child := range node {
+				if renderer := walk(child); renderer != nil {
+					return renderer
+				}
+			}
+		case map[string]any:
+			if renderer, ok := node[rendererName].(map[string]any); ok {
+				return renderer
+			}
+			for _, key := range sortedKeys(node) {
+				if renderer := walk(node[key]); renderer != nil {
+					return renderer
+				}
+			}
+		}
+		return nil
+	}
+	return walk(root)
 }
 
 func newBrowseResult(raw json.RawMessage) *BrowseResult {

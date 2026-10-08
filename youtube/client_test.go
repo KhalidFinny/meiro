@@ -245,6 +245,58 @@ func TestPlaylistAndUpNextAreReadOnlyBrowseCalls(t *testing.T) {
 	}
 }
 
+func TestLyricsRelatedAndRecapUseReadOnlyEndpoints(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		switch r.URL.Path {
+		case "/youtubei/v1/next":
+			if request["videoId"] != "track-lyrics" {
+				t.Errorf("track-tab video ID = %v", request["videoId"])
+			}
+			_, _ = w.Write([]byte(`{"tabs":[{"tabRenderer":{"endpoint":{"browseEndpoint":{"browseId":"lyrics-id","browseEndpointContextSupportedConfigs":{"browseEndpointContextMusicConfig":{"pageType":"MUSIC_PAGE_TYPE_TRACK_LYRICS"}}}}}},{"tabRenderer":{"endpoint":{"browseEndpoint":{"browseId":"related-id","browseEndpointContextSupportedConfigs":{"browseEndpointContextMusicConfig":{"pageType":"MUSIC_PAGE_TYPE_TRACK_RELATED"}}}}}}]}`))
+		case "/youtubei/v1/browse":
+			switch request["browseId"] {
+			case "lyrics-id":
+				_, _ = w.Write([]byte(`{"contents":{"musicDescriptionShelfRenderer":{"description":{"runs":[{"text":"Line one\nLine two"}]},"footer":{"simpleText":"Lyrics provided by partner"}}}}`))
+			case "related-id":
+				_, _ = w.Write([]byte(`{"contents":{"musicShelfRenderer":{"contents":[{"musicResponsiveListItemRenderer":{"videoId":"related-track","title":{"simpleText":"Related song"}}}]}}}`))
+			case "FEmusic_listening_review":
+				_, _ = w.Write([]byte(`{"contents":{"musicCarouselShelfRenderer":{"title":{"simpleText":"Your recap"}}}}`))
+			default:
+				t.Errorf("unexpected browse ID %v", request["browseId"])
+			}
+		default:
+			t.Errorf("unexpected endpoint %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(Options{BaseURL: server.URL, APIKey: "key"})
+	lyrics, err := client.GetLyrics(context.Background(), "track-lyrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lyrics.Description != "Line one\nLine two" || lyrics.Footer != "Lyrics provided by partner" {
+		t.Errorf("lyrics = %#v", lyrics)
+	}
+	related, err := client.GetRelated(context.Background(), "track-lyrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(related.Items) != 1 || related.Items[0].VideoID != "related-track" {
+		t.Errorf("related items = %#v", related.Items)
+	}
+	recap, err := client.GetRecap(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recap.Sections) != 1 || recap.Sections[0].Title != "Your recap" {
+		t.Errorf("recap sections = %#v", recap.Sections)
+	}
+}
+
 func TestGetAccountDetailsUsesOAuth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/youtubei/v1/account/accounts_list" {
