@@ -670,7 +670,7 @@ func extractMusicSections(raw json.RawMessage) []MusicSection {
 					if renderer, ok := child.(map[string]any); ok {
 						data, _ := json.Marshal(renderer)
 						sections = append(sections, MusicSection{
-							Title: rendererText(renderer["title"]), Kind: key,
+							Title: rendererTitle(renderer), Kind: key,
 							Items: extractMusicItems(data), ContinuationToken: continuationToken(data), Raw: data,
 						})
 					}
@@ -879,7 +879,18 @@ func parseMusicItem(kind string, renderer map[string]any) MusicItem {
 	if item.Duration == "" {
 		item.Duration = rendererColumnText(renderer, "fixedColumns", 0)
 	}
+	if item.Duration == "" {
+		// Search and library rows keep the length at the end of their last
+		// flex column, as "Artist • Album • 3:42".
+		item.Duration = rendererFlexDuration(renderer)
+		if item.Duration != "" {
+			item.Subtitle = strings.TrimSuffix(item.Subtitle, " • "+item.Duration)
+		}
+	}
 	item.VideoID, _ = renderer["videoId"].(string)
+	if item.VideoID == "" {
+		item.VideoID = rendererVideoID(renderer)
+	}
 	item.PlaylistID, _ = renderer["playlistId"].(string)
 	item.BrowseID = navigationID(renderer["navigationEndpoint"])
 	if item.VideoID != "" {
@@ -891,6 +902,11 @@ func parseMusicItem(kind string, renderer map[string]any) MusicItem {
 	}
 	if item.Thumbnail == "" {
 		item.Thumbnail = rendererThumbnail(renderer["thumbnail"])
+	}
+	if item.Thumbnail == "" {
+		// Two-row items keep their art under thumbnailRenderer instead of
+		// thumbnail.
+		item.Thumbnail = rendererThumbnail(renderer)
 	}
 	data, _ := json.Marshal(renderer)
 	item.Raw = data
@@ -932,11 +948,141 @@ func rendererColumnText(renderer map[string]any, columnName string, index int) s
 	if !ok {
 		return ""
 	}
-	columnRenderer, ok := column["musicResponsiveListItemFlexColumnRenderer"].(map[string]any)
+	// A flex column holds a musicResponsiveListItemFlexColumnRenderer and a
+	// fixed column a musicResponsiveListItemFixedColumnRenderer.
+	for _, key := range []string{"musicResponsiveListItemFlexColumnRenderer", "musicResponsiveListItemFixedColumnRenderer"} {
+		if columnRenderer, ok := column[key].(map[string]any); ok {
+			return rendererText(columnRenderer["text"])
+		}
+	}
+	return ""
+}
+
+// rendererVideoID finds a renderer's video ID where responses nest it,
+// as search rows do in their flex columns. It looks only where a track's ID
+// lives, never in the item's menu, whose entries carry other IDs.
+func rendererVideoID(renderer map[string]any) string {
+	for _, key := range []string{"playlistItemData", "navigationEndpoint", "overlay", "flexColumns"} {
+		value, ok := renderer[key]
+		if !ok {
+			continue
+		}
+		if id := nestedString(value, "videoId"); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// rendererTitle reads a shelf's title, which newer responses put in the
+// shelf's header instead of the shelf itself.
+func rendererTitle(renderer map[string]any) string {
+	if title := rendererText(renderer["title"]); title != "" {
+		return title
+	}
+	header, ok := renderer["header"].(map[string]any)
 	if !ok {
 		return ""
 	}
-	return rendererText(columnRenderer["text"])
+	for _, key := range sortedKeys(header) {
+		headerRenderer, ok := header[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if title := rendererText(headerRenderer["title"]); title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+// nestedString returns the first non-empty string stored under name anywhere
+// in value. It visits maps in sorted key order, so the result is stable.
+func nestedString(value any, name string) string {
+	var result string
+	var walk func(any)
+	walk = func(current any) {
+		if result != "" {
+			return
+		}
+		switch node := current.(type) {
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		case map[string]any:
+			if text, ok := node[name].(string); ok && text != "" {
+				result = text
+				return
+			}
+			for _, key := range sortedKeys(node) {
+				walk(node[key])
+			}
+		}
+	}
+	walk(value)
+	return result
+}
+
+// rendererFlexDuration reads a track length from the trailing run of a
+// musicResponsiveListItemRenderer's last flex column, where search and
+// library rows keep it.
+func rendererFlexDuration(renderer map[string]any) string {
+	columns, ok := renderer["flexColumns"].([]any)
+	if !ok {
+		return ""
+	}
+	for index := len(columns) - 1; index >= 0; index-- {
+		column, ok := columns[index].(map[string]any)
+		if !ok {
+			continue
+		}
+		columnRenderer, ok := column["musicResponsiveListItemFlexColumnRenderer"].(map[string]any)
+		if !ok {
+			continue
+		}
+		text, ok := columnRenderer["text"].(map[string]any)
+		if !ok {
+			continue
+		}
+		runs, ok := text["runs"].([]any)
+		if !ok {
+			continue
+		}
+		for runIndex := len(runs) - 1; runIndex >= 0; runIndex-- {
+			run, ok := runs[runIndex].(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, navigates := run["navigationEndpoint"]; navigates {
+				continue
+			}
+			if text, _ := run["text"].(string); isDurationText(text) {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+// isDurationText reports whether text reads as a track length, as "3:42" or
+// "1:02:03".
+func isDurationText(text string) bool {
+	parts := strings.Split(text, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || len(part) > 2 {
+			return false
+		}
+		for _, digit := range part {
+			if digit < '0' || digit > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func navigationID(value any) string {
@@ -990,8 +1136,8 @@ func rendererThumbnail(value any) string {
 					result, _ = thumbnail["url"].(string)
 				}
 			}
-			for _, child := range node {
-				walk(child)
+			for _, key := range sortedKeys(node) {
+				walk(node[key])
 			}
 		}
 	}

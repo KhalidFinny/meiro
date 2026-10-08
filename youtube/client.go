@@ -32,6 +32,11 @@ const (
 	defaultMusicClientID = "67"
 )
 
+// browserUserAgent is the User-Agent the Music homepage needs to serve its
+// full page, which carries the InnerTube API key. Without it, YouTube
+// answers with a stub that has no key.
+const browserUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
 var (
 	apiKeyPattern        = regexp.MustCompile(`"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"`)
 	clientVersionPattern = regexp.MustCompile(`"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"`)
@@ -160,6 +165,7 @@ func (c *Client) ensureConfig(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	req.Header.Set("User-Agent", browserUserAgent)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("youtube: load Music configuration: %w", err)
