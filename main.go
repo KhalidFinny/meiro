@@ -48,6 +48,7 @@ type app struct {
 	// What the user chose, and where it is kept; empty keeps nothing.
 	settings     settings
 	settingsPath string
+	saver        settingsWriter
 	// The theme being shown. A change of colours glides from one scheme to
 	// the next rather than cutting.
 	shown     *m3.Theme
@@ -188,12 +189,7 @@ func (a *app) saveSettings() {
 	if a.settingsPath == "" {
 		return
 	}
-	s, path := a.settings, a.settingsPath
-	go func() {
-		if err := s.save(path); err != nil {
-			log.Printf("saving settings: %v", err)
-		}
-	}()
+	a.saver.save(&a.settings, a.settingsPath)
 }
 
 // client returns the client to use for a request: the account's when the

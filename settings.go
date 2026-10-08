@@ -2,11 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/egoist/mygo/ui"
 
@@ -35,8 +39,16 @@ func defaultSettings() settings {
 	return settings{Seed: "#6750a4", Mode: "system", Volume: 70}
 }
 
+// clone returns a copy that shares no memory with s, for work that outlives
+// the caller's use of the settings.
+func (s *settings) clone() settings {
+	c := *s
+	c.Recent = slices.Clone(s.Recent)
+	return c
+}
+
 // config returns the theme configuration the settings describe.
-func (s settings) config() m3.Config {
+func (s *settings) config() m3.Config {
 	seed := m3.DefaultSeed
 	if parsed, ok := parseSeed(s.Seed); ok {
 		seed = parsed
@@ -55,20 +67,21 @@ func (s settings) config() m3.Config {
 	return m3.Config{Seed: seed, Mode: mode, Style: style}
 }
 
-func setMode(s *settings, mode m3.Mode) {
+func (s *settings) setMode(mode m3.Mode) {
 	s.Mode = strings.ToLower(mode.String())
 }
 
-// parseSeed reads "#rrggbb" without panicking on what a file holds.
-func parseSeed(text string) (c ui.Color, ok bool) {
-	if len(text) != 7 || text[0] != '#' {
-		return c, false
+// parseSeed reads "#rrggbb", and says no to anything else a file may hold.
+func parseSeed(text string) (ui.Color, bool) {
+	digits, ok := strings.CutPrefix(text, "#")
+	if !ok || len(digits) != 6 {
+		return ui.Color{}, false
 	}
-	var r, g, b uint8
-	if _, err := fmt.Sscanf(text[1:], "%02x%02x%02x", &r, &g, &b); err != nil {
-		return c, false
+	rgb, err := strconv.ParseUint(digits, 16, 32)
+	if err != nil {
+		return ui.Color{}, false
 	}
-	return ui.RGB(r, g, b), true
+	return ui.RGB(uint8(rgb>>16), uint8(rgb>>8), uint8(rgb)), true
 }
 
 func seedHex(c ui.Color) string {
@@ -83,10 +96,13 @@ func (s *settings) remember(query string) {
 	}
 	s.Recent = slices.DeleteFunc(s.Recent, func(q string) bool { return strings.EqualFold(q, query) })
 	s.Recent = append([]string{query}, s.Recent...)
-	if len(s.Recent) > 8 {
-		s.Recent = s.Recent[:8]
+	if len(s.Recent) > maxRecent {
+		s.Recent = s.Recent[:maxRecent]
 	}
 }
+
+// maxRecent is how many submitted searches the settings keep.
+const maxRecent = 8
 
 // loadSettings reads the settings file, and returns the defaults for one that
 // is missing or unreadable.
@@ -97,11 +113,19 @@ func loadSettings(path string) settings {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Printf("reading settings: %v", err)
+		}
 		return s
 	}
 	var read settings
-	if json.Unmarshal(data, &read) != nil {
+	if err := json.Unmarshal(data, &read); err != nil {
+		// The next save replaces the file, so say what was lost.
+		log.Printf("settings in %s are not readable, starting from the defaults: %v", path, err)
 		return s
+	}
+	if len(read.Recent) > maxRecent {
+		read.Recent = read.Recent[:maxRecent]
 	}
 	if read.Volume < 0 || read.Volume > 100 {
 		read.Volume = s.Volume
@@ -115,8 +139,9 @@ func loadSettings(path string) settings {
 	return read
 }
 
-// save writes the settings, atomically, so a crash never leaves half a file.
-func (s settings) save(path string) error {
+// save writes the settings so that a crash leaves either the old file or the
+// new one, never half of one.
+func (s *settings) save(path string) (err error) {
 	if path == "" {
 		return nil
 	}
@@ -124,12 +149,77 @@ func (s settings) save(path string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	temp := path + ".tmp"
-	if err := os.WriteFile(temp, data, 0o600); err != nil {
+	file, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(temp, path)
+	defer func() {
+		if err != nil {
+			_ = os.Remove(file.Name())
+		}
+	}()
+	if _, err = file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err = file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err = file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
 }
+
+// settingsWriter saves settings off the main thread, one write at a time and
+// in the order they were asked for. A save asked for while another runs
+// replaces any waiting one, so a slider dragged across the screen costs a
+// few writes, not one for each frame.
+type settingsWriter struct {
+	mu      sync.Mutex
+	next    *settings
+	path    string
+	running bool
+	idle    sync.WaitGroup
+}
+
+// save writes s to path soon. It keeps its own copy of s.
+func (w *settingsWriter) save(s *settings, path string) {
+	c := s.clone()
+	w.mu.Lock()
+	w.next, w.path = &c, path
+	if w.running {
+		w.mu.Unlock()
+		return
+	}
+	w.running = true
+	w.idle.Add(1)
+	w.mu.Unlock()
+	go w.drain()
+}
+
+func (w *settingsWriter) drain() {
+	defer w.idle.Done()
+	for {
+		w.mu.Lock()
+		s, path := w.next, w.path
+		w.next = nil
+		if s == nil {
+			w.running = false
+			w.mu.Unlock()
+			return
+		}
+		w.mu.Unlock()
+		if err := s.save(path); err != nil {
+			log.Printf("saving settings: %v", err)
+		}
+	}
+}
+
+// wait returns once every save asked for so far has been written.
+func (w *settingsWriter) wait() { w.idle.Wait() }

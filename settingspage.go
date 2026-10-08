@@ -66,7 +66,7 @@ func (a *app) appearanceCard(c *ui.Context) {
 			settingLabel(c, "Theme", "Follow the desktop, or stay light or dark.").Grow(1)
 			mode := int(th.Mode)
 			if m3.ButtonGroup(c, "mode", &mode, []string{"System", "Light", "Dark"}, nil) {
-				setMode(&a.settings, m3.Modes[mode])
+				a.settings.setMode(m3.Modes[mode])
 				a.saveSettings()
 			}
 		})

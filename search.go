@@ -1,6 +1,8 @@
 package main
 
 import (
+	"slices"
+
 	"github.com/egoist/mygo/ui"
 
 	"github.com/elianiva/meiro/m3"
@@ -83,12 +85,6 @@ func (a *app) searchLanding(c *ui.Context) {
 
 // forget takes a search out of the recent ones.
 func (a *app) forget(query string) {
-	kept := a.settings.Recent[:0]
-	for _, q := range a.settings.Recent {
-		if q != query {
-			kept = append(kept, q)
-		}
-	}
-	a.settings.Recent = kept
+	a.settings.Recent = slices.DeleteFunc(a.settings.Recent, func(q string) bool { return q == query })
 	a.saveSettings()
 }

@@ -604,3 +604,44 @@ func TestFailedLoadMoreKeepsThePage(t *testing.T) {
 		t.Errorf("rows after a failed load more = %q, want the shelf and the button", kinds)
 	}
 }
+
+// Saves asked for in a burst, while the list they hold is edited, must not
+// race, and the last one must be what ends up on disk.
+func TestSettingsSavesAreOrderedAndIndependent(t *testing.T) {
+	dir := t.TempDir()
+	a := newTestApp()
+	a.settingsPath = filepath.Join(dir, "settings.json")
+	for i := range 200 {
+		a.settings.Recent = []string{"a", "b", "c", "d", "e"}
+		a.settings.Volume = float64(i % 100)
+		a.saveSettings()
+		a.forget("a")
+		a.settings.remember("last")
+	}
+	a.settings.Volume = 42
+	a.saveSettings()
+	a.saver.wait()
+
+	got := loadSettings(a.settingsPath)
+	if got.Volume != 42 || len(got.Recent) == 0 || got.Recent[0] != "last" {
+		t.Errorf("the last save was not the one kept: volume %v, recent %v", got.Volume, got.Recent)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("saving left %d files behind, want only the settings", len(entries))
+	}
+}
+
+func TestParseSeedIsStrict(t *testing.T) {
+	if c, ok := parseSeed("#6750a4"); !ok || c != ui.RGB(0x67, 0x50, 0xa4) {
+		t.Errorf("a good seed gave %v, %v", c, ok)
+	}
+	for _, bad := range []string{"", "6750a4", "#6750a", "#6750a4f", "#1 2 3 ", "#+1+1+1", "#0x1234", "#gggggg"} {
+		if _, ok := parseSeed(bad); ok {
+			t.Errorf("%q was taken as a seed", bad)
+		}
+	}
+}
