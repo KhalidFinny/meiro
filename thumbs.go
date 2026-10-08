@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"context"
+	"fmt"
 	"image"
 	_ "image/jpeg" // artwork decoders, for the colour taken from it
 	_ "image/png"
@@ -33,6 +33,8 @@ const thumbRetry = 10 * time.Second
 type thumbCache struct {
 	client *http.Client
 	notify func()
+	// slots holds a token for each download under way.
+	slots chan struct{}
 	// synth, when set, answers every request without the network: tests give
 	// pages artwork of their own making.
 	synth func(url string, size int) *ui.Bitmap
@@ -81,6 +83,7 @@ func newThumbCache(notify func()) *thumbCache {
 		pending: make(map[string]bool),
 		failed:  make(map[string]time.Time),
 		sizes:   make(map[string][]string),
+		slots:   make(chan struct{}, thumbFetches),
 	}
 }
 
@@ -122,29 +125,53 @@ func (t *thumbCache) touch(entry *thumb) *ui.Bitmap {
 	return entry.bitmap
 }
 
-func (t *thumbCache) fetch(url string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	var data []byte
-	if request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil); err == nil {
-		if response, err := t.client.Do(request); err == nil {
-			if response.StatusCode >= 200 && response.StatusCode < 300 {
-				data, _ = io.ReadAll(io.LimitReader(response.Body, 8<<20))
-			}
-			response.Body.Close()
-		}
+// thumbFetches is how many pictures download at once. A page of covers asks
+// for dozens together, and the connections would crowd each other out.
+const thumbFetches = 6
+
+// thumbLimit is the largest picture the cache will take.
+const thumbLimit = 8 << 20
+
+// download fetches the picture at url.
+func (t *thumbCache) download(url string) ([]byte, error) {
+	request, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
 	}
+	response, err := t.client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %d", response.StatusCode)
+	}
+	// One byte more than the limit tells a picture that fits from one cut off.
+	data, err := io.ReadAll(io.LimitReader(response.Body, thumbLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > thumbLimit {
+		return nil, fmt.Errorf("larger than %d bytes", thumbLimit)
+	}
+	return data, nil
+}
+
+// fetch downloads and decodes the picture at url, and stores it, or notes that
+// it failed.
+func (t *thumbCache) fetch(url string) {
+	t.slots <- struct{}{}
+	defer func() { <-t.slots }()
 	// The picture is decoded once, for the bitmap and for its colour alike.
 	var bitmap *ui.Bitmap
 	var colour ui.Color
 	var hasColour bool
-	if len(data) > 0 {
+	if data, err := t.download(url); err == nil {
 		if img, _, err := image.Decode(bytes.NewReader(data)); err == nil {
 			bitmap = ui.NewBitmap(img)
 			colour, hasColour = dominantColour(img)
 		}
 	}
-	data = nil
 	t.mu.Lock()
 	delete(t.pending, url)
 	if bitmap == nil {

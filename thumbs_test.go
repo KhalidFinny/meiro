@@ -7,6 +7,7 @@ import (
 	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -126,5 +127,37 @@ func TestThumbCacheDropsTheBitmapDrawnLeastRecently(t *testing.T) {
 	}
 	if cache.held != 2*size || len(cache.sizes) != 2 {
 		t.Errorf("held = %d (want %d), sizes = %d (want 2)", cache.held, 2*size, len(cache.sizes))
+	}
+}
+
+// A page asks for dozens of covers at once; only a few may download together.
+func TestThumbCacheLimitsConcurrentDownloads(t *testing.T) {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 8, 8)), nil); err != nil {
+		t.Fatal(err)
+	}
+	var active, peak atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := active.Add(1)
+		defer active.Add(-1)
+		for {
+			old := peak.Load()
+			if n <= old || peak.CompareAndSwap(old, n) {
+				break
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer server.Close()
+
+	cache := newThumbCache(func() {})
+	const covers = 30
+	for i := range covers {
+		cache.bitmap(server.URL+"/cover"+strconv.Itoa(i)+"=w60-h60", 60)
+	}
+	waitFor(t, func() bool { cache.mu.Lock(); defer cache.mu.Unlock(); return len(cache.bitmaps) == covers })
+	if got := peak.Load(); got > thumbFetches {
+		t.Errorf("%d downloads ran together, want at most %d", got, thumbFetches)
 	}
 }
