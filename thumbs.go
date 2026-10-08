@@ -107,10 +107,16 @@ func (t *thumbCache) fetch(url string) {
 			response.Body.Close()
 		}
 	}
+	// The picture is decoded once, for the bitmap and for its colour alike.
 	var bitmap *ui.Bitmap
+	var img image.Image
 	if len(data) > 0 {
-		bitmap, _ = ui.DecodeBitmap(data)
+		if decoded, _, err := image.Decode(bytes.NewReader(data)); err == nil {
+			img = decoded
+			bitmap = ui.NewBitmap(img)
+		}
 	}
+	data = nil
 	t.mu.Lock()
 	delete(t.pending, url)
 	if bitmap == nil {
@@ -121,7 +127,7 @@ func (t *thumbCache) fetch(url string) {
 		return
 	}
 	t.bitmaps[url] = bitmap
-	if colour, ok := dominantColour(data); ok {
+	if colour, ok := dominantColour(img); ok {
 		t.colours[url] = colour
 	}
 	t.order = append(t.order, url)
@@ -190,11 +196,7 @@ func (t *thumbCache) colour(url string, size int) (ui.Color, bool) {
 // dominantColour finds the colour of a picture that a theme should grow from:
 // the most vivid hue among the pixels that are neither near black nor near
 // white, weighted by how much of the picture it fills and how saturated it is.
-func dominantColour(data []byte) (ui.Color, bool) {
-	img, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return ui.Color{}, false
-	}
+func dominantColour(img image.Image) (ui.Color, bool) {
 	const bins, grid = 24, 28
 	var weight [bins]float64
 	var sumR, sumG, sumB [bins]float64

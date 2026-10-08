@@ -297,16 +297,26 @@ func TestArtworkColour(t *testing.T) {
 	if err := png.Encode(&data, img); err != nil {
 		t.Fatal(err)
 	}
-	got, ok := dominantColour(data.Bytes())
+	got, ok := dominantColour(decoded(t, data.Bytes()))
 	if !ok || got.B < 150 || got.R > 80 {
 		t.Errorf("dominantColour = %v, %v; want the blue", got, ok)
 	}
 	grey := image.NewRGBA(image.Rect(0, 0, 8, 8))
 	data.Reset()
 	png.Encode(&data, grey)
-	if _, ok := dominantColour(data.Bytes()); ok {
+	if _, ok := dominantColour(decoded(t, data.Bytes())); ok {
 		t.Errorf("a grey picture should have no dominant colour")
 	}
+}
+
+// decoded reads a picture the way the thumbnail cache does.
+func decoded(t *testing.T, data []byte) image.Image {
+	t.Helper()
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
 }
 
 func TestTargetOfRoutesItemsToPages(t *testing.T) {
