@@ -542,3 +542,65 @@ func TestPlayingShowsLoadingAndIgnoresASecondPress(t *testing.T) {
 		t.Errorf("the second track did not start: gen=%d, loading=%v", a.streamGen, a.loading())
 	}
 }
+
+// The queue is the tracks the user chose to play from, not the rows of
+// whatever page is drawn next.
+func TestQueueSurvivesTheNextPageOfRows(t *testing.T) {
+	a := newTestApp()
+	a.run = func(work func()) {}
+	song := func(id string) youtube.MusicItem { return youtube.MusicItem{VideoID: id, ID: id, Title: id} }
+	a.router.Push("/search")
+	a.search.submitted = "x"
+	a.search.items = []youtube.MusicItem{song("A"), song("B"), song("C")}
+	a.setRows()
+	a.play(a.playable[0], a.playable, 0)
+
+	a.search.items = []youtube.MusicItem{song("X"), song("Y"), song("Z")}
+	a.setRows()
+	if got := a.queue[0].VideoID + a.queue[1].VideoID + a.queue[2].VideoID; got != "ABC" {
+		t.Errorf("the queue became %q after the next page was drawn", got)
+	}
+}
+
+// failingMusic answers every request with a server error.
+type failingMusic struct{}
+
+func (failingMusic) RoundTrip(request *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("down")),
+		Request:    request,
+	}, nil
+}
+
+// A failed request for more must not throw away the page, and must leave the
+// button to ask again.
+func TestFailedLoadMoreKeepsThePage(t *testing.T) {
+	a := newTestApp()
+	client := youtube.NewClient(youtube.Options{APIKey: "test", HTTPClient: &http.Client{Transport: failingMusic{}}})
+	a.public, a.authed = client, client
+	a.feed.items = []youtube.MusicItem{{VideoID: "a", ID: "a", Title: "Kept song"}}
+	a.feed.more = "token"
+
+	a.loadMore()
+	if a.feed.err != "" || a.feed.moreErr == "" || a.feed.more != "token" {
+		t.Fatalf("after a failed load: err=%q moreErr=%q more=%q", a.feed.err, a.feed.moreErr, a.feed.more)
+	}
+	a.setRows()
+	kinds := ""
+	for _, r := range a.rows {
+		if r.kind == rowCards {
+			kinds += "c"
+		}
+		if r.kind == rowMore {
+			kinds += "m"
+		}
+		if r.kind == rowError {
+			t.Fatalf("the page was replaced by an error: %q", r.title)
+		}
+	}
+	if kinds != "cm" {
+		t.Errorf("rows after a failed load more = %q, want the shelf and the button", kinds)
+	}
+}

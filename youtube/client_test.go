@@ -509,3 +509,19 @@ func TestResultsDropRendererJSONUnlessKept(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractMusicItemsKeepsASongListedTwice(t *testing.T) {
+	entry := func(setID string) string {
+		return `{"musicResponsiveListItemRenderer":{"playlistItemData":{"videoId":"V1","playlistSetVideoId":"` + setID + `"},` +
+			`"flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Song"}]}}}]}}`
+	}
+	twice := []byte(`{"contents":[` + entry("S1") + `,` + entry("S2") + `]}`)
+	if got := extractMusicItems(twice); len(got) != 2 {
+		t.Errorf("a playlist holding a song twice gave %d items, want 2", len(got))
+	}
+	// The same entry met twice, as a response may repeat one, stays one.
+	repeated := []byte(`{"contents":[` + entry("S1") + `,` + entry("S1") + `]}`)
+	if got := extractMusicItems(repeated); len(got) != 1 {
+		t.Errorf("a repeated entry gave %d items, want 1", len(got))
+	}
+}

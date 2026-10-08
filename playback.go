@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net/url"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -19,7 +20,9 @@ func (a *app) play(item youtube.MusicItem, queue []youtube.MusicItem, index int)
 	if item.VideoID == "" {
 		return
 	}
-	a.queue = queue
+	// The page rebuilds its own list on every frame, so the queue must not
+	// share its backing array.
+	a.queue = slices.Clone(queue)
 	if len(a.queue) == 0 {
 		a.queue = []youtube.MusicItem{item}
 	}

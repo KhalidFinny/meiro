@@ -848,8 +848,13 @@ func extractMusicItems(raw json.RawMessage) []MusicItem {
 				if ok {
 					if renderer, ok := child.(map[string]any); ok {
 						item := parseMusicItem(kind, renderer)
-						identity := item.VideoID + item.BrowseID + item.PlaylistID + item.Title
-						if identity != "" {
+						// A playlist may hold a song twice; its entries differ by
+						// the ID the playlist gave each, which keeps both.
+						identity := strings.Join([]string{
+							item.VideoID, item.BrowseID, item.PlaylistID, item.Title,
+							nestedString(renderer["playlistItemData"], "playlistSetVideoId"),
+						}, "\x00")
+						if identity != "\x00\x00\x00\x00" {
 							if _, exists := seen[identity]; !exists {
 								seen[identity] = struct{}{}
 								items = append(items, item)

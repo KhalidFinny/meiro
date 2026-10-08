@@ -47,6 +47,9 @@ type pageState struct {
 	sections []youtube.MusicSection
 	items    []youtube.MusicItem
 	more     string
+	// moreErr is why the last request for more failed. The page keeps what it
+	// has, and the button to ask again.
+	moreErr string
 }
 
 // searchState is the search page. Typing only edits query; a search runs when
@@ -280,8 +283,10 @@ func (a *app) loadMore() {
 		return
 	}
 	token, searching := s.more, a.router.Path() == "/search"
-	s.more = ""
-	job := a.nextJob()
+	s.more, s.moreErr = "", ""
+	// A page load that begins meanwhile, or a navigation, makes this result
+	// stale; asking for more must not itself cancel one in flight.
+	job := a.job
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -304,7 +309,7 @@ func (a *app) loadMore() {
 				return
 			}
 			if err != nil {
-				s.err = err.Error()
+				s.more, s.moreErr = token, err.Error()
 				return
 			}
 			if len(s.sections) > 0 {
@@ -403,7 +408,11 @@ func (a *app) setRows() {
 		}
 	}
 	if s.more != "" {
-		a.rows = append(a.rows, row{kind: rowMore, title: "Show more", track: -1})
+		title := "Show more"
+		if s.moreErr != "" {
+			title = "Could not load more. Try again"
+		}
+		a.rows = append(a.rows, row{kind: rowMore, title: title, track: -1})
 	}
 	if len(a.rows) == 0 || (len(a.rows) == 1 && a.rows[0].kind == rowHero) {
 		title := "Nothing here yet"
