@@ -375,7 +375,7 @@ func TestCookieAuthenticationAndAllAccounts(t *testing.T) {
 		if user["onBehalfOfUser"] != "UC-channel" {
 			t.Errorf("user context = %#v", user)
 		}
-		_, _ = w.Write([]byte(`{"accounts":[{"accountName":{"simpleText":"Main channel"},"channelId":"UC-channel","channelHandle":"@main","isSelected":true,"accountPhoto":{"thumbnails":[{"url":"https://img.example/main"}]}}]}`))
+		_, _ = w.Write([]byte(`{"accountSectionListRenderer":{"contents":[{"accountItemSectionRenderer":{"contents":[{"accountItemRenderer":{"accountName":{"simpleText":"Main channel"},"accountByline":{"simpleText":"Creator"},"channelHandle":{"runs":[{"text":"@main"}]},"endpoint":{"browseEndpoint":{"browseId":"UC-channel"}},"isSelected":true,"hasChannel":true,"accountPhoto":{"thumbnails":[{"url":"https://img.example/main"}]}}}]}}]}}`))
 	}))
 	defer server.Close()
 	client := NewClient(Options{BaseURL: server.URL, APIKey: "key", CookieAuth: cookieAuth})
@@ -385,7 +385,7 @@ func TestCookieAuthenticationAndAllAccounts(t *testing.T) {
 	}
 	if !strings.Contains(string(accounts.Raw), "UC-channel") || len(accounts.Items) != 1 {
 		t.Errorf("accounts response = %#v", accounts)
-	} else if channel := accounts.Items[0]; channel.Name != "Main channel" || channel.ChannelID != "UC-channel" || channel.Handle != "@main" || !channel.Selected || channel.Thumbnail != "https://img.example/main" {
+	} else if channel := accounts.Items[0]; channel.Name != "Main channel" || channel.Byline != "Creator" || channel.ChannelID != "UC-channel" || channel.Handle != "@main" || !channel.Selected || !channel.HasChannel || channel.Thumbnail != "https://img.example/main" {
 		t.Errorf("parsed account channel = %#v", channel)
 	}
 	if _, err := NewCookieAuth("SID=not-enough", CookieOptions{}); err == nil {
