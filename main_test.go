@@ -1,16 +1,27 @@
 package main
 
 import (
+	"bytes"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/elianiva/meiro/m3"
 	"github.com/elianiva/meiro/youtube"
 )
+
+// searches counts the search requests the fake YouTube has answered.
+var searches atomic.Int32
 
 // fakeMusic answers the InnerTube endpoints with canned responses, so the
 // app's tests need no network.
@@ -33,6 +44,7 @@ func (fakeMusic) RoundTrip(request *http.Request) (*http.Response, error) {
 	case strings.Contains(asked, "MPREb_test"):
 		reply = albumResponse
 	case strings.Contains(asked, `"query"`):
+		searches.Add(1)
 		reply = searchResponse
 	case strings.Contains(asked, `"videoId"`):
 		reply = playerResponse
@@ -61,14 +73,13 @@ func newTestApp() *app {
 func TestHomeListsSections(t *testing.T) {
 	a := newTestApp()
 	tt := ui.NewTester(a.view, 1000, 700)
-	if !tt.HasText("Meiro") {
-		t.Fatalf("the sidebar is missing: %q", tt.Texts())
+	for _, text := range []string{"Home", "Search", "Explore", "Library", "Settings", "Quick picks", "Ambient One"} {
+		if !tt.HasText(text) {
+			t.Fatalf("the home page is missing %q: %q", text, tt.Texts())
+		}
 	}
-	if !tt.HasText("Quick picks") || !tt.HasText("Ambient One") {
-		t.Fatalf("the home page did not list its sections: %q", tt.Texts())
-	}
-	if !tt.HasText("Sign in with Google") {
-		t.Errorf("the account panel is missing: %q", tt.Texts())
+	if _, ok := tt.Find("Account"); !ok {
+		t.Errorf("the account button is missing: %q", tt.Texts())
 	}
 }
 
@@ -81,10 +92,10 @@ func TestOpeningAnAlbumFromTheHomePage(t *testing.T) {
 	if a.router.Path() != "/album/MPREb_test" {
 		t.Fatalf("clicking an album went to %q", a.router.Path())
 	}
-	if a.detail.title != "Deep Focus" {
-		t.Errorf("the album page heading is %q", a.detail.title)
+	if a.detail.title != "Deep Focus" || a.detail.kind != pageAlbum {
+		t.Errorf("the album page heading is %+v", a.detail)
 	}
-	if !tt.HasText("Album Track One") {
+	if !tt.HasText("Album Track One") || !tt.HasText("ALBUM") {
 		t.Fatalf("the album page did not list its tracks: %q", tt.Texts())
 	}
 	if len(a.playable) != 1 || a.playable[0].VideoID != "vid-3" {
@@ -93,19 +104,47 @@ func TestOpeningAnAlbumFromTheHomePage(t *testing.T) {
 	if a.playable[0].Duration != "4:12" {
 		t.Errorf("the track length is %q", a.playable[0].Duration)
 	}
+	if err := tt.Click("Back"); err != nil {
+		t.Fatal(err)
+	}
+	if a.router.Path() != "/home" {
+		t.Errorf("going back led to %q", a.router.Path())
+	}
 }
 
-func TestSearchShowsResults(t *testing.T) {
+// Typing in the search field must not search: only Enter does.
+func TestSearchRunsOnSubmitOnly(t *testing.T) {
 	a := newTestApp()
 	a.router.Push("/search")
 	tt := ui.NewTester(a.view, 1000, 700)
-	if err := tt.Click("Search YouTube Music"); err != nil {
+	searches.Store(0)
+	if err := tt.Click("Search songs, albums, artists"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Type("ambient")
+	time.Sleep(50 * time.Millisecond)
+	tt.Frame()
+	if n := searches.Load(); n != 0 || tt.HasText("Search Result Song") {
+		t.Fatalf("typing ran %d searches: %q", n, tt.Texts())
+	}
 	tt.Key(0, ui.KeyEnter)
+	if n := searches.Load(); n != 1 {
+		t.Fatalf("Enter ran %d searches, want 1", n)
+	}
 	if !tt.HasText("Search Result Song") {
 		t.Fatalf("the search results are missing: %q", tt.Texts())
+	}
+	if len(a.settings.Recent) != 1 || a.settings.Recent[0] != "ambient" {
+		t.Errorf("the search was not remembered: %v", a.settings.Recent)
+	}
+	// Picking another filter searches again for what was submitted, not for
+	// whatever is half typed.
+	tt.Type("zzz")
+	if err := tt.Click("Songs"); err != nil {
+		t.Fatal(err)
+	}
+	if n := searches.Load(); n != 2 || a.search.submitted != "ambient" {
+		t.Errorf("a filter ran %d searches for %q", n, a.search.submitted)
 	}
 }
 
@@ -114,28 +153,158 @@ func TestPlayerBarShowsTheCurrentTrack(t *testing.T) {
 	a.current = youtube.MusicItem{VideoID: "vid-1", Title: "Ambient One", Subtitle: "Someone"}
 	a.total = 3*time.Minute + 33*time.Second
 	tt := ui.NewTester(a.view, 1000, 700)
-	if !tt.HasText("Ambient One") {
+	if !tt.HasText("Ambient One") || !tt.HasText("3:33") || !tt.HasText("0:00") {
 		t.Fatalf("the player bar does not show the track: %q", tt.Texts())
 	}
-	if !tt.HasText("0:00 / 3:33") {
-		t.Errorf("the player bar does not show the time: %q", tt.Texts())
+	for _, control := range []string{"Play", "Previous", "Next", "Shuffle", "Repeat", "Position", "Up next"} {
+		if _, ok := tt.Find(control); !ok {
+			t.Errorf("the %s control is missing: %q", control, tt.Texts())
+		}
 	}
-	if _, ok := tt.Find("Play or pause"); !ok {
-		t.Errorf("the transport is missing: %q", tt.Texts())
+	if err := tt.Click("Open the player"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.npOpen || !tt.HasText("Now playing") {
+		t.Errorf("the full-screen player did not open: %q", tt.Texts())
+	}
+	tt.Key(0, ui.KeyEscape)
+	if a.npOpen {
+		t.Errorf("Escape did not close the full-screen player")
 	}
 }
 
-func TestEveryLayoutShowsThePage(t *testing.T) {
-	for layout := range layoutNames {
-		name := layoutNames[layout]
-		t.Run(name, func(t *testing.T) {
-			a := newTestApp()
-			a.layout = layout
-			tt := ui.NewTester(a.view, 1000, 700)
-			if !tt.HasText("Ambient One") || !tt.HasText("Deep Focus") {
-				t.Fatalf("the %s layout does not show the page: %q", name, tt.Texts())
-			}
-		})
+func TestShuffleAndRepeatChooseTheNextTrack(t *testing.T) {
+	a := newTestApp()
+	a.queue = []youtube.MusicItem{{VideoID: "a"}, {VideoID: "b"}, {VideoID: "c"}}
+	if i, ok := a.nextIndex(); !ok || i != 1 {
+		t.Errorf("next = %d, %v", i, ok)
+	}
+	a.index = 2
+	if _, ok := a.nextIndex(); ok {
+		t.Errorf("the queue should end after its last track")
+	}
+	a.repeat = 1
+	if i, ok := a.nextIndex(); !ok || i != 0 {
+		t.Errorf("repeating the queue went to %d, %v", i, ok)
+	}
+	a.shuffle = true
+	for range 50 {
+		if i, ok := a.nextIndex(); !ok || i == a.index {
+			t.Fatalf("shuffle chose %d, %v for the current track", i, ok)
+		}
+	}
+}
+
+// Every page draws, in both appearances, with and without a track playing.
+func TestEveryPageDraws(t *testing.T) {
+	for _, path := range []string{"/home", "/explore", "/library", "/search", "/settings", "/album/MPREb_test", "/nowhere"} {
+		for _, dark := range []bool{false, true} {
+			t.Run(path, func(t *testing.T) {
+				a := newTestApp()
+				a.router.Push(path)
+				tt := ui.NewTester(a.view, 1000, 700)
+				tt.SetDark(dark)
+				a.current = youtube.MusicItem{VideoID: "vid-1", Title: "Ambient One"}
+				a.npOpen = path == "/home"
+				tt.Frame()
+				if len(tt.Texts()) == 0 {
+					t.Fatalf("%s drew nothing", path)
+				}
+			})
+		}
+	}
+}
+
+// The settings restyle the window: a new seed, palette style or mode changes
+// the colours every component draws with.
+func TestSettingsChangeTheTheme(t *testing.T) {
+	a := newTestApp()
+	a.router.Push("/settings")
+	tt := ui.NewTester(a.view, 1000, 900)
+	before := m3.Active().Scheme.Primary
+	if err := tt.Click("Rose"); err != nil {
+		t.Fatal(err)
+	}
+	if a.settings.Seed != "#d81b78" {
+		t.Fatalf("clicking Rose chose %q", a.settings.Seed)
+	}
+	tt.SetPreferences(ui.Preferences{ReduceMotion: true, TextScale: 1})
+	tt.Frame()
+	if after := m3.Active().Scheme.Primary; after == before {
+		t.Errorf("the primary colour stayed %v after choosing a new seed", after)
+	}
+	if err := tt.Click("Dark"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !m3.Active().Dark || a.settings.Mode != "dark" {
+		t.Errorf("choosing Dark left dark=%v, mode=%q", m3.Active().Dark, a.settings.Mode)
+	}
+	if err := tt.Click("Vibrant"); err != nil {
+		t.Fatal(err)
+	}
+	if a.settings.Style != int(m3.Vibrant) {
+		t.Errorf("choosing Vibrant left style %d", a.settings.Style)
+	}
+}
+
+func TestSettingsPersist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "settings.json")
+	s := defaultSettings()
+	s.Seed, s.Mode, s.Style, s.Dynamic = "#00897b", "dark", int(m3.Expressive), true
+	s.remember("one")
+	s.remember("two")
+	s.remember("One")
+	if err := s.save(path); err != nil {
+		t.Fatal(err)
+	}
+	got := loadSettings(path)
+	if got.Seed != s.Seed || got.Mode != "dark" || got.Style != int(m3.Expressive) || !got.Dynamic {
+		t.Errorf("settings came back as %+v", got)
+	}
+	if len(got.Recent) != 2 || got.Recent[0] != "One" {
+		t.Errorf("recent searches came back as %v", got.Recent)
+	}
+	cfg := got.config()
+	if cfg.Mode != m3.Dark || cfg.Style != m3.Expressive {
+		t.Errorf("config = %+v", cfg)
+	}
+	if bad := loadSettings(filepath.Join(t.TempDir(), "missing.json")); bad.Seed != defaultSettings().Seed {
+		t.Errorf("a missing file gave %+v", bad)
+	}
+	if err := os.WriteFile(path, []byte("{nonsense"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if bad := loadSettings(path); bad.Seed != defaultSettings().Seed {
+		t.Errorf("a broken file gave %+v", bad)
+	}
+}
+
+func TestArtworkColour(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 40, 40))
+	for y := 0; y < 40; y++ {
+		for x := 0; x < 40; x++ {
+			img.Set(x, y, color.RGBA{R: 30, G: 60, B: 200, A: 255})
+		}
+	}
+	for y := 0; y < 6; y++ {
+		for x := 0; x < 6; x++ {
+			img.Set(x, y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+		}
+	}
+	var data bytes.Buffer
+	if err := png.Encode(&data, img); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := dominantColour(data.Bytes())
+	if !ok || got.B < 150 || got.R > 80 {
+		t.Errorf("dominantColour = %v, %v; want the blue", got, ok)
+	}
+	grey := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	data.Reset()
+	png.Encode(&data, grey)
+	if _, ok := dominantColour(data.Bytes()); ok {
+		t.Errorf("a grey picture should have no dominant colour")
 	}
 }
 

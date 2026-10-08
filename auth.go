@@ -7,6 +7,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/elianiva/meiro/m3"
 	"github.com/elianiva/meiro/youtube"
 )
 
@@ -103,77 +104,100 @@ func (a *app) onSignedIn() {
 	}
 }
 
-// signInModal shows the device code the user types at Google, while the
+// signInDialog shows the device code the user types at Google, while the
 // sign-in is going on.
-func (a *app) signInModal(c *ui.Context) {
+func (a *app) signInDialog(c *ui.Context) {
 	if !a.signIn.open {
 		return
 	}
-	t := c.Theme()
-	ui.Modal(c, &a.signIn.open, func() {
-		ui.Column(c).Width(420).Gap(14).Padding(24).
-			Background(t.Background).Border(1, t.Border).Children(func() {
-			ui.Text(c, "Sign in to YouTube Music").FontSize(18).Bold()
-			if a.signIn.code.UserCode == "" {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Spinner(c)
-					ui.Text(c, "Asking Google for a code…").TextColor(t.TextMuted)
-				})
-			} else {
-				ui.Text(c, "Open the page below in a browser and enter this code:").TextColor(t.TextMuted)
-				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, a.signIn.code.UserCode).FontSize(26).Bold().LetterSpacing(2)
-					if ui.Button(c, "Copy").Clicked() {
-						c.WriteClipboard(a.signIn.code.UserCode)
-						c.Toast("Code copied")
-					}
-				})
-				ui.Link(c, a.signIn.code.VerificationURL, a.signIn.code.VerificationURL)
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Spinner(c)
-					ui.Text(c, "Waiting for you to approve the sign-in…").TextColor(t.TextMuted)
-				})
-			}
-			if a.signIn.err != "" {
-				ui.Text(c, a.signIn.err).TextColor(t.Danger).MaxLines(4)
-			}
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, "Cancel").Clicked() {
-					a.signIn.open = false
+	sc := m3.Active().Scheme
+	m3.Dialog(c, &a.signIn.open, 440, func() {
+		ui.Box(c).Size(56, 56).Radius(m3.Large).Background(sc.PrimaryContainer).Center().Children(func() {
+			ui.Icon(c, m3.IconLogin).FontSize(28).TextColor(sc.OnPrimaryContainer)
+		})
+		m3.EmphasizedText(c, m3.HeadlineSmall, "Sign in to YouTube Music")
+		if a.signIn.code.UserCode == "" {
+			ui.Row(c).Gap(14).AlignItems(ui.Center).Children(func() {
+				m3.LoadingIndicator(c, 40, false)
+				m3.Text(c, m3.BodyMedium, "Asking Google for a code…").TextColor(sc.OnSurfaceVariant)
+			})
+		} else {
+			m3.Text(c, m3.BodyMedium, "Open the page below in a browser and enter this code:").TextColor(sc.OnSurfaceVariant)
+			ui.Row(c).Gap(8).Padding(8, 8, 8, 20).AlignItems(ui.Center).Radius(m3.LargeIncreased).Background(sc.SurfaceContainerHighest).Children(func() {
+				m3.EmphasizedText(c, m3.HeadlineMedium, a.signIn.code.UserCode).LetterSpacing(3).Grow(1).SelectionColor(sc.PrimaryContainer)
+				if m3.IconButton(c, m3.IconButtonSpec{Icon: m3.IconCopy, Label: "Copy the code", Kind: m3.TonalIcon, Key: "copy-code"}).Clicked() {
+					c.WriteClipboard(a.signIn.code.UserCode)
+					c.Toast("Code copied")
 				}
 			})
+			ui.Link(c, a.signIn.code.VerificationURL, a.signIn.code.VerificationURL).TextColor(sc.Primary)
+			ui.Row(c).Gap(14).AlignItems(ui.Center).Children(func() {
+				m3.LoadingIndicator(c, 40, false)
+				m3.Text(c, m3.BodyMedium, "Waiting for you to approve the sign-in…").TextColor(sc.OnSurfaceVariant)
+			})
+		}
+		if a.signIn.err != "" {
+			m3.Text(c, m3.BodyMedium, a.signIn.err).TextColor(sc.Error).MaxLines(4)
+		}
+		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			if m3.Button(c, m3.ButtonSpec{Label: "Cancel", Kind: m3.TextOnly, Key: "cancel-sign-in"}).Clicked() {
+				a.signIn.open = false
+			}
 		})
 	})
 }
 
-// accountPanel shows who is signed in, or the button that starts a sign-in.
-func (a *app) accountPanel(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Padding(12, 14).Gap(8).Children(func() {
+// accountButton is the account's picture in the top bar, which opens a menu
+// of the account, the settings and the sign-in.
+func (a *app) accountButton(c *ui.Context) {
+	sc := m3.Active().Scheme
+	button := ui.ButtonBase(c.Key("account"))
+	button.Size(48, 48).Radius(m3.Full).Center().Cursor(ui.CursorPointer).Label("Account").Tooltip("Account")
+	if button.Hovered() || a.menuOpen {
+		button.Background(sc.OnSurface.Alpha(m3.StateHover))
+	}
+	button.Children(func() {
 		if a.signedIn {
 			name := a.account.Name
 			if name == "" {
 				name = "Signed in"
 			}
-			ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Image(c, a.thumbs.bitmap(a.account.Thumbnail, 64)).Size(30, 30).Fit(ui.Cover).Background(t.SurfaceHover)
-				ui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
-					ui.Text(c, name).SingleLine().FontSize(12).Bold()
-					if a.account.Email != "" {
-						ui.Text(c, a.account.Email).SingleLine().FontSize(11).TextColor(t.TextMuted)
-					}
-				})
-			})
-			if ui.Button(c, "Sign out").FillWidth().FontSize(11).Clicked() {
-				a.signOut()
-			}
+			m3.Avatar(c, name, a.thumbs.bitmap(a.account.Thumbnail, 96), 36)
 			return
 		}
-		if ui.PrimaryButton(c, "Sign in with Google").Clicked() {
-			a.signInWithGoogle()
+		ui.Box(c).Size(36, 36).Radius(m3.Full).Background(sc.SurfaceContainerHighest).Center().Children(func() {
+			ui.Icon(c, m3.IconPerson).FontSize(22).TextColor(sc.OnSurfaceVariant)
+		})
+	})
+	if button.Clicked() {
+		a.menuOpen = !a.menuOpen
+	}
+	m3.Menu(c, button, &a.menuOpen, 280, func() {
+		if a.signedIn {
+			ui.Column(c).Padding(12, 12, 8).Gap(2).Children(func() {
+				name := a.account.Name
+				if name == "" {
+					name = "Signed in"
+				}
+				m3.EmphasizedText(c, m3.TitleSmall, name).SingleLine()
+				if a.account.Email != "" {
+					m3.Text(c, m3.BodySmall, a.account.Email).SingleLine().TextColor(sc.OnSurfaceVariant)
+				}
+			})
+			ui.Divider(c)
 		}
-		if a.signIn.err != "" && !a.signIn.open {
-			ui.Text(c, a.signIn.err).FontSize(11).TextColor(t.Danger).MaxLines(3)
+		if m3.MenuItem(c, "Settings", m3.IconSettings).Clicked() {
+			a.menuOpen = false
+			a.router.Push("/settings")
+		}
+		if a.signedIn {
+			if m3.MenuItem(c, "Sign out", m3.IconLogout).Clicked() {
+				a.menuOpen = false
+				a.signOut()
+			}
+		} else if m3.MenuItem(c, "Sign in with Google", m3.IconLogin).Clicked() {
+			a.menuOpen = false
+			a.signInWithGoogle()
 		}
 	})
 }

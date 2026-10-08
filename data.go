@@ -22,19 +22,22 @@ const (
 	pageExplore  = "explore"
 	pageLibrary  = "library"
 	pageSearch   = "search"
+	pageSettings = "settings"
 )
 
-// searchKinds maps the search page's choices to the package's filters.
-var searchKinds = map[string]youtube.SearchType{
-	"All":       youtube.SearchAll,
-	"Songs":     youtube.SearchSongs,
-	"Albums":    youtube.SearchAlbums,
-	"Artists":   youtube.SearchArtists,
-	"Playlists": youtube.SearchPlaylists,
-	"Videos":    youtube.SearchVideos,
+// searchKinds are the filters of the search page, in the order its chips show
+// them.
+var searchKinds = []struct {
+	name string
+	kind youtube.SearchType
+}{
+	{"All", youtube.SearchAll},
+	{"Songs", youtube.SearchSongs},
+	{"Albums", youtube.SearchAlbums},
+	{"Artists", youtube.SearchArtists},
+	{"Playlists", youtube.SearchPlaylists},
+	{"Videos", youtube.SearchVideos},
 }
-
-var searchKindNames = []string{"All", "Songs", "Albums", "Artists", "Playlists", "Videos"}
 
 // pageState is what a page has loaded, whichever page it is.
 type pageState struct {
@@ -45,38 +48,56 @@ type pageState struct {
 	more     string
 }
 
-// searchState is the search page, which also waits for typing to pause.
+// searchState is the search page. Typing only edits query; a search runs when
+// the user submits it, and submitted is what the results are for.
 type searchState struct {
 	pageState
-	query string
-	kind  string
-	at    time.Time
+	query     string
+	submitted string
+	kind      int
 }
 
-// row is one line of a page: a section heading, an item, or the button that
-// loads the next page of items.
+// rowKind says what a row of a page's list holds.
+type rowKind int
+
+const (
+	rowHero    rowKind = iota // the heading of an album, playlist or artist
+	rowHeading                // the name of a section, with arrows for its shelf
+	rowCards                  // a shelf of cards that scrolls sideways
+	rowColumns                // a shelf of songs in columns that scrolls sideways
+	rowTrack                  // one song, album, artist or playlist in a column of rows
+	rowMore                   // the button that loads the next page
+	rowLoading                // the page is loading
+	rowError                  // the page failed
+	rowEmpty                  // the page has nothing on it
+)
+
+// row is one line of a page's list.
 type row struct {
-	header bool
-	more   bool
-	title  string
-	item   youtube.MusicItem
-	// track is the item's place among the page's playable items, or -1.
+	kind  rowKind
+	title string
+	// shelf names the carousel a heading steers, and a shelf draws.
+	shelf string
+	// items are the cards or songs of a shelf; item is the one of a track row.
+	items []youtube.MusicItem
+	item  youtube.MusicItem
+	// queue is what playing from this row plays: the songs of its shelf, or
+	// of the page.
+	queue []youtube.MusicItem
+	// track is the place of a song among the page's songs, or -1.
 	track int
-	// seq tells rows that carry no identity apart.
-	seq int
 }
 
-// key identifies a row across frames, so the list keeps its place and its
-// choice when items change.
+// key identifies a row across frames, so the list keeps its place when the
+// rows change.
 func (r row) key() any {
-	switch {
-	case r.header:
-		return "header:" + strconv.Itoa(r.seq)
-	case r.more:
-		return "more"
-	default:
-		return "item:" + r.item.ID + "\x00" + r.item.Title
+	switch r.kind {
+	case rowTrack:
+		return "track:" + r.item.ID + "\x00" + r.item.Title + "\x00" + strconv.Itoa(r.track)
+	case rowCards, rowColumns, rowHeading:
+		return strconv.Itoa(int(r.kind)) + ":" + r.shelf
 	}
+	return strconv.Itoa(int(r.kind)) + ":" + r.title
 }
 
 // onNavigate resets the page state and loads what the new location shows.
@@ -84,10 +105,10 @@ func (r row) key() any {
 // action that opened it already described.
 func (a *app) onNavigate() {
 	a.feed = pageState{}
-	a.search = searchState{query: a.search.query, kind: a.search.kind}
-	a.rows, a.playable, a.selected = nil, nil, -1
+	a.rows, a.playable = nil, nil
 	// The list is shared by every page, so a new page starts at its top.
 	a.list.ScrollTo(0, ui.Start)
+	a.npOpen = false
 
 	path := a.router.Path()
 	switch {
@@ -104,17 +125,20 @@ func (a *app) onNavigate() {
 		}
 	case path == "/search":
 		a.detail = detail{}
-		if a.search.query != "" {
-			a.loadSearch()
-		}
+		a.focusSearch = a.search.submitted == ""
+	case path == "/settings":
+		a.detail = detail{}
 	case strings.HasPrefix(path, "/album/"):
 		a.detail = a.details[path]
+		a.detail.kind = pageAlbum
 		a.loadDetail(pageAlbum, pathArg(path))
 	case strings.HasPrefix(path, "/playlist/"):
 		a.detail = a.details[path]
+		a.detail.kind = pagePlaylist
 		a.loadDetail(pagePlaylist, pathArg(path))
 	case strings.HasPrefix(path, "/artist/"):
 		a.detail = a.details[path]
+		a.detail.kind = pageArtist
 		a.loadDetail(pageArtist, pathArg(path))
 	}
 }
@@ -164,13 +188,8 @@ func (a *app) fetch(load func(ctx context.Context) (*youtube.BrowseResult, error
 		return
 	}
 	a.feed.loading, a.feed.err = true, ""
-	a.job++
-	job := a.job
-	if a.cancel != nil {
-		a.cancel()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	a.cancel = cancel
+	job := a.nextJob()
+	ctx := a.jobContext()
 	a.run(func() {
 		result, err := load(ctx)
 		a.update(func() {
@@ -178,7 +197,6 @@ func (a *app) fetch(load func(ctx context.Context) (*youtube.BrowseResult, error
 				return
 			}
 			a.feed.loading = false
-			a.selected = -1
 			if err != nil {
 				a.feed.err = err.Error()
 				return
@@ -190,28 +208,44 @@ func (a *app) fetch(load func(ctx context.Context) (*youtube.BrowseResult, error
 	})
 }
 
-// loadSearch runs the query the user typed, with the chosen filter.
-func (a *app) loadSearch() {
-	query := strings.TrimSpace(a.search.query)
-	a.search.at = time.Time{}
+// nextJob numbers a new load, so one that lands after a newer one began is
+// dropped.
+func (a *app) nextJob() int {
+	a.job++
+	return a.job
+}
+
+// jobContext cancels the load in flight and returns the context of the next.
+func (a *app) jobContext() context.Context {
+	if a.cancel != nil {
+		a.cancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+	return ctx
+}
+
+// runSearch searches for what the user submitted, with the chosen filter. It
+// is the only way a search starts: typing in the field never does.
+func (a *app) runSearch(query string) {
+	query = strings.TrimSpace(query)
 	if query == "" {
 		a.search = searchState{kind: a.search.kind}
 		return
 	}
+	a.search.query, a.search.submitted = query, query
+	a.settings.remember(query)
+	a.saveSettings()
+	a.search.sections = nil
 	if a.client() == nil {
 		return
 	}
 	a.search.loading, a.search.err, a.search.more = true, "", ""
 	a.search.items = nil
 	a.list.ScrollTo(0, ui.Start)
-	a.job++
-	job := a.job
-	if a.cancel != nil {
-		a.cancel()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	a.cancel = cancel
-	kind := searchKinds[a.search.kind]
+	job := a.nextJob()
+	ctx := a.jobContext()
+	kind := searchKinds[a.search.kind].kind
 	a.run(func() {
 		result, err := a.client().Search(ctx, query, youtube.SearchOptions{Type: kind})
 		a.update(func() {
@@ -219,7 +253,6 @@ func (a *app) loadSearch() {
 				return
 			}
 			a.search.loading = false
-			a.selected = -1
 			if err != nil {
 				a.search.err = err.Error()
 				return
@@ -238,8 +271,7 @@ func (a *app) loadMore() {
 	}
 	token, searching := s.more, a.router.Path() == "/search"
 	s.more = ""
-	a.job++
-	job := a.job
+	job := a.nextJob()
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -284,212 +316,157 @@ func (a *app) pageState() *pageState {
 	return &a.feed
 }
 
-// page builds the page the router shows.
-func (a *app) page(c *ui.Context) {
-	a.router.View(c, func(r *ui.Route) {
-		switch {
-		case r.Match("/home"):
-			r.Title("Home")
-			a.contentPage(c, "Home")
-		case r.Match("/explore"):
-			r.Title("Explore")
-			a.contentPage(c, "Explore")
-		case r.Match("/library"):
-			r.Title("Library")
-			a.libraryPage(c)
-		case r.Match("/search"):
-			r.Title("Search")
-			a.searchPage(c)
-		case r.Match("/album/{id}"):
-			r.Title("Album")
-			a.contentPage(c, "Album")
-		case r.Match("/playlist/{id}"):
-			r.Title("Playlist")
-			a.contentPage(c, "Playlist")
-		case r.Match("/artist/{id}"):
-			r.Title("Artist")
-			a.contentPage(c, "Artist")
-		default:
-			r.Title("Not found")
-			a.centered(c, "Not found", "That page does not exist.", "", nil)
-		}
-	})
+// isDetail reports whether the page is an album, a playlist or an artist.
+func isDetail(path string) bool {
+	return strings.HasPrefix(path, "/album/") || strings.HasPrefix(path, "/playlist/") || strings.HasPrefix(path, "/artist/")
 }
 
-func (a *app) libraryPage(c *ui.Context) {
-	if !a.signedIn {
-		t := c.Theme()
-		ui.Column(c).Fill().Center().Gap(10).Padding(24).Children(func() {
-			ui.Text(c, "Your library").FontSize(18).Bold()
-			ui.Text(c, "Sign in with your Google account to see your songs, albums and playlists.").
-				TextColor(t.TextMuted).MaxWidth(460).TextAlign(ui.Center)
-			if ui.PrimaryButton(c, "Sign in with Google").Clicked() {
-				a.signInWithGoogle()
-			}
-		})
-		return
-	}
-	a.contentPage(c, "Library")
-}
-
-// contentPage shows a loaded browse page under a heading, with a button
-// that plays everything on it.
-func (a *app) contentPage(c *ui.Context, fallback string) {
-	a.setRows(a.pageState())
-	ui.Column(c).Fill().Children(func() {
-		a.heading(c, fallback)
-		a.body(c)
-	})
-}
-
-func (a *app) searchPage(c *ui.Context) {
-	ui.Column(c).Fill().Children(func() {
-		ui.Column(c).Padding(20, 24, 8).Gap(12).Children(func() {
-			ui.Text(c, "Search").FontSize(24).Bold()
-			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-				field := ui.SearchField(c, &a.search.query).Label("Search YouTube Music").Grow(1).MaxWidth(480)
-				switch {
-				case field.Submitted():
-					a.loadSearch()
-				case field.Changed():
-					a.search.at = c.Now().Add(300 * time.Millisecond)
-					c.After(300 * time.Millisecond)
-				}
-				if ui.Select(c, &a.search.kind, searchKindNames).Label("Type").Width(150).Changed() {
-					a.loadSearch()
-				}
-				a.layoutPicker(c)
-			})
-		})
-		// Typing runs the search once it pauses, not on every keystroke.
-		if !a.search.at.IsZero() && !c.Now().Before(a.search.at) {
-			a.loadSearch()
-		}
-		a.setRows(a.pageState())
-		a.body(c)
-	})
-}
-
-// heading shows what the page is, and the button that plays all of it.
-func (a *app) heading(c *ui.Context, fallback string) {
-	t := c.Theme()
-	title, subtitle, art := a.detail.title, a.detail.subtitle, a.detail.art
-	if title == "" {
-		title = fallback
-	}
-	ui.Row(c).Gap(16).Padding(20, 24, 12).AlignItems(ui.Center).Children(func() {
-		if art != "" {
-			ui.Image(c, a.thumbs.bitmap(art, 160)).Size(88, 88).Fit(ui.Cover).Background(t.Surface).Shrink(0)
-		}
-		ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
-			ui.Text(c, title).FontSize(26).Bold().SingleLine()
-			if subtitle != "" {
-				ui.Text(c, subtitle).TextColor(t.TextMuted).SingleLine()
-			}
-		})
-		a.layoutPicker(c)
-		if len(a.playable) == 0 {
-			return
-		}
-		if playButton(c, "Play").Clicked() {
-			a.playAll()
-		}
-	})
-}
-
-// body shows the page's rows, or what to do while they are not there.
-func (a *app) body(c *ui.Context) {
-	t := c.Theme()
+// setRows flattens the loaded page into the rows its list shows, and
+// collects the songs that playing the page would queue.
+func (a *app) setRows() {
+	path := a.router.Path()
 	s := a.pageState()
+	a.rows, a.playable = a.rows[:0], a.playable[:0]
+	onDetail := isDetail(path)
+	if onDetail {
+		a.rows = append(a.rows, row{kind: rowHero, title: a.detail.title, track: -1})
+	}
 	switch {
 	case s.loading:
-		ui.Row(c).Padding(24).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Spinner(c)
-			ui.Text(c, "Loading…").TextColor(t.TextMuted)
-		})
+		a.rows = append(a.rows, row{kind: rowLoading, track: -1})
+		return
 	case s.err != "":
-		a.centered(c, "Something went wrong", s.err, "Try again", a.retry)
-	case len(a.rows) == 0:
-		a.centered(c, "Nothing here yet", "", "", nil)
-	default:
-		a.listView(c)
-	}
-}
-
-// setRows flattens the loaded page into rows, and collects the items that
-// playing the page would queue.
-func (a *app) setRows(s *pageState) {
-	a.rows, a.playable = a.rows[:0], a.playable[:0]
-	if s.loading || s.err != "" {
+		a.rows = append(a.rows, row{kind: rowError, title: s.err, track: -1})
 		return
 	}
-	for _, section := range s.sections {
-		if section.Title != "" {
-			a.rows = append(a.rows, row{header: true, title: section.Title, seq: len(a.rows)})
-		}
-		for _, item := range section.Items {
-			a.appendRow(item)
-		}
+
+	// Songs on an album or playlist page carry no artwork of their own: the
+	// page's is what they belong to, and what the player shows.
+	fallback := ""
+	if onDetail && a.detail.kind != pageArtist {
+		fallback = a.detail.art
 	}
-	if len(s.sections) == 0 {
-		for _, item := range s.items {
-			a.appendRow(item)
+	sections := s.sections
+	if len(sections) == 0 && len(s.items) > 0 {
+		sections = []youtube.MusicSection{{Items: s.items}}
+	}
+	vertical := onDetail && a.detail.kind != pageArtist || path == "/search"
+	for index, section := range sections {
+		if len(section.Items) == 0 {
+			continue
+		}
+		shelf := path + "#" + strconv.Itoa(index)
+		songs := 0
+		for _, item := range section.Items {
+			if kind, _ := targetOf(item); kind == pageTrack {
+				songs++
+			}
+		}
+		if section.Title != "" {
+			a.rows = append(a.rows, row{kind: rowHeading, title: section.Title, shelf: shelf, track: -1})
+		}
+		switch {
+		case vertical || (onDetail && songs*10 >= len(section.Items)*6):
+			for _, item := range section.Items {
+				r := row{kind: rowTrack, item: item, track: -1}
+				if kind, _ := targetOf(item); kind == pageTrack {
+					r.track = len(a.playable)
+					if item.Thumbnail == "" {
+						item.Thumbnail = fallback
+					}
+					a.playable = append(a.playable, item)
+				}
+				a.rows = append(a.rows, r)
+			}
+		default:
+			var queue []youtube.MusicItem
+			for _, item := range section.Items {
+				if kind, _ := targetOf(item); kind == pageTrack {
+					queue = append(queue, item)
+				}
+			}
+			kind := rowCards
+			if songs*10 >= len(section.Items)*6 && len(section.Items) >= 3 && section.Items[0].Duration != "" {
+				kind = rowColumns
+			}
+			a.rows = append(a.rows, row{kind: kind, shelf: shelf, items: section.Items, queue: queue, track: -1})
 		}
 	}
 	if s.more != "" {
-		a.rows = append(a.rows, row{more: true, title: "Load more"})
+		a.rows = append(a.rows, row{kind: rowMore, title: "Show more", track: -1})
 	}
-}
-
-func (a *app) appendRow(item youtube.MusicItem) {
-	track := -1
-	if kind, _ := targetOf(item); kind == pageTrack {
-		track = len(a.playable)
-		a.playable = append(a.playable, item)
-	}
-	a.rows = append(a.rows, row{title: item.Title, item: item, track: track})
-}
-
-// trackNumber is the place an item holds among the page's songs, and "" for
-// an item that is not a song.
-func trackNumber(r row) string {
-	if r.track < 0 {
-		return ""
-	}
-	return strconv.Itoa(r.track + 1)
-}
-
-func (a *app) sectionHeading(c *ui.Context, title string) {
-	ui.Text(c, title).FontSize(15).Bold().Padding(18, 12, 6)
-}
-
-func (a *app) moreRow(c *ui.Context) {
-	ui.Row(c).Padding(10, 12).Children(func() {
-		if ui.Button(c, "Load more").Clicked() {
-			a.loadMore()
+	if len(a.rows) == 0 || (len(a.rows) == 1 && a.rows[0].kind == rowHero) {
+		title := "Nothing here yet"
+		if path == "/search" {
+			title = "No results for “" + a.search.submitted + "”"
 		}
-	})
+		a.rows = append(a.rows, row{kind: rowEmpty, title: title, track: -1})
+	}
 }
 
-// activate opens what a row holds: a song plays, and an album, artist or
-// playlist opens its page.
-func (a *app) activate(r row) {
-	switch {
-	case r.more:
-		a.loadMore()
-		return
-	case r.header:
-		return
-	}
-	kind, id := targetOf(r.item)
+// activate opens what a song, album, artist or playlist is: a song plays from
+// its place in queue, and the others open their page.
+func (a *app) activate(item youtube.MusicItem, queue []youtube.MusicItem) {
+	kind, id := targetOf(item)
 	switch kind {
 	case pageTrack:
-		a.play(r.item, a.playable, r.track)
+		index := 0
+		for i, q := range queue {
+			if q.VideoID == item.VideoID {
+				index = i
+				break
+			}
+		}
+		a.play(item, queue, index)
 	case pageAlbum, pagePlaylist, pageArtist:
 		path := "/" + kind + "/" + url.PathEscape(id)
-		a.details[path] = detail{title: r.item.Title, subtitle: r.item.Subtitle, art: r.item.Thumbnail}
+		a.details[path] = detail{title: item.Title, subtitle: item.Subtitle, art: item.Thumbnail, kind: kind}
 		a.router.Push(path)
 	}
+}
+
+// playCollection plays an album or a playlist from its first song, without
+// opening its page, as the play button over its card does.
+func (a *app) playCollection(item youtube.MusicItem) {
+	kind, id := targetOf(item)
+	if kind == pageTrack {
+		a.play(item, []youtube.MusicItem{item}, 0)
+		return
+	}
+	if kind != pageAlbum && kind != pagePlaylist || a.client() == nil {
+		return
+	}
+	a.run(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		var result *youtube.BrowseResult
+		var err error
+		if kind == pageAlbum {
+			result, err = a.client().GetAlbum(ctx, id)
+		} else {
+			result, err = a.client().GetPlaylist(ctx, id)
+		}
+		var songs []youtube.MusicItem
+		if err == nil {
+			all := result.Items
+			for _, section := range result.Sections {
+				all = append(all, section.Items...)
+			}
+			for _, song := range all {
+				if k, _ := targetOf(song); k == pageTrack {
+					if song.Thumbnail == "" {
+						song.Thumbnail = item.Thumbnail
+					}
+					songs = append(songs, song)
+				}
+			}
+		}
+		a.update(func() {
+			if len(songs) > 0 {
+				a.play(songs[0], songs, 0)
+			}
+		})
+	})
 }
 
 // targetOf says what an item opens. Album, artist and playlist IDs are
@@ -512,27 +489,10 @@ func targetOf(item youtube.MusicItem) (kind, id string) {
 	return "", ""
 }
 
-// centered shows a message in the middle of the page, with a button when
-// there is something to do about it.
-func (a *app) centered(c *ui.Context, title, detail, action string, run func()) {
-	t := c.Theme()
-	ui.Column(c).Fill().Center().Gap(8).Padding(24).Children(func() {
-		ui.Text(c, title).FontSize(16).Bold()
-		if detail != "" {
-			ui.Text(c, detail).TextColor(t.TextMuted).MaxLines(4).MaxWidth(520).TextAlign(ui.Center)
-		}
-		if action != "" && run != nil {
-			if ui.Button(c, action).Clicked() {
-				run()
-			}
-		}
-	})
-}
-
 // retry loads the page shown again.
 func (a *app) retry() {
 	if a.router.Path() == "/search" {
-		a.loadSearch()
+		a.runSearch(a.search.submitted)
 		return
 	}
 	a.onNavigate()

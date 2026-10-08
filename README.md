@@ -11,32 +11,54 @@ itself, so the app starts at once and needs no web frontend.
 - Signs in with a Google account through the OAuth device flow, and keeps
   the session across restarts.
 - Shows the account's library when signed in.
-- Plays music: play, pause, seek, previous, next and volume.
+- Plays music: play, pause, seek, previous, next, shuffle, repeat and volume,
+  with the queue and the lyrics of the song in a full-screen player.
+- Themes itself from one colour you choose, or from the cover of the song
+  that is playing.
 
-The interface is black and white, and follows the desktop's light or dark
-appearance.
+The interface is [Material 3 Expressive](https://m3.material.io/blog/building-with-m3-expressive):
+a navigation rail, content on a rounded tonal sheet, a floating player, shape
+that morphs with state (the play button squares off while music plays), a
+wavy scrubber, spring motion, and a colour scheme derived from a seed. Text is
+set in [Google Sans](https://github.com/googlefonts/googlesans), embedded from
+`fonts/` under the SIL Open Font License (`fonts/OFL.txt`).
 
 ## Use
 
-The sidebar names four pages: **Home** and **Explore** show the feeds YouTube
+The rail names four pages: **Home** and **Explore** show the shelves YouTube
 Music offers, **Search** finds songs, albums, artists and playlists, and
-**Library** shows your own collection. Opening an album, an artist or a
-playlist from any of them shows its page.
+**Library** shows your own collection. **Settings** sits at its foot, and the
+menu button above it opens the rail into labels beside icons. Opening an
+album, an artist or a playlist from any shelf shows its page.
 
-Click a song to play it, from that point in the page; double-click or press
-Enter to do the same from the keyboard. **Play** in a page's heading plays
-everything on it. The player bar below the pages has the transport, a
-scrubber, and the volume.
+Click a song to play it, with the rest of its shelf or page queued behind it.
+Over an album or playlist card, the round button plays it without opening it.
+The player floats over the foot of the page; click it to open the full-screen
+player, with the queue and the lyrics beside the artwork.
 
-Every page that lists items draws them in the layout the heading's picker
-chooses: **Rows**, denser **Compact** rows, **Columns**, a **Grid** of
-cards, or a **Split** list beside a pane describing the item you are on.
-The choice applies to every page.
+Search runs when you press Enter, never while you type. Picking another
+filter (Songs, Albums, …) searches again for what you last submitted, and the
+searches you made are listed on the page, newest first.
+
+### Settings
+
+- **Theme**: follow the desktop, or stay light or dark.
+- **Colour**: one of twelve seeds, or any hue on the slider. Every colour in
+  the app, light and dark, grows from it, and the window glides to the new
+  colours as you choose.
+- **Palette**: how the seed is spent: Tonal spot, Vibrant, Expressive,
+  Neutral or Monochrome.
+- **Colour from artwork**: take the seed from the cover of the song playing.
+
+The choices are kept in `settings.json` in the app's data directory.
 
 | Keys | What they do |
 | --- | --- |
 | Space | Play or pause |
 | Cmd+← and Cmd+→ | Previous and next track |
+| Cmd+K | Search |
+| Cmd+, | Settings |
+| Esc | Close the full-screen player |
 
 ## Requirements
 
@@ -81,6 +103,31 @@ MEIRO_LIVE_KEYCHAIN=1 go test -run TestLiveKeychain -v .
 ```
 
 ## Packages
+
+### `m3`
+
+A Material 3 Expressive kit for MyGo, with no dependency on the rest of the
+app. A `m3.Theme` is resolved from a seed colour, a palette style and a mode;
+`m3.Provide` makes it the theme of the view and sets MyGo's own theme from
+it, so every component, and the widgets MyGo draws itself, take its colours.
+
+- **Colour**: tonal palettes in Oklch (tones follow L\*, chroma is pulled in
+  to fit sRGB), the full set of colour roles for light and dark, five palette
+  styles, and `Scheme.Mix` for gliding between two schemes.
+- **Components**: buttons (five kinds, five sizes, round or square, toggles
+  that change shape), icon buttons, FABs, chips, connected button groups, a
+  navigation rail (collapsed and expanded), a pill search bar, switches,
+  Expressive sliders with a wavy active track, a morphing loading indicator,
+  menus, dialogs, snackbars, avatars, artwork frames and carousels.
+- **Motion**: springs (`SpatialFast`, `SpatialDefault`, `EffectsDefault`, …)
+  that drive transitions and shape morphs.
+- **Type and shape**: the Material type scale with emphasised weights, and
+  the shape scale as corner radii. `m3.FontFamily` sets the typeface; the app
+  registers Google Sans and passes it in.
+
+`go test ./m3` checks that every colour role keeps its contrast, for every
+seed hue, style and appearance. With `MEIRO_SNAPSHOTS=/some/dir`, `go test
+-run Gallery ./m3` also renders every component to PNG files.
 
 ### `youtube`
 

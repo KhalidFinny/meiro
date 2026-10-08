@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/url"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/egoist/mygo/ui"
 
 	"github.com/elianiva/meiro/youtube"
 )
@@ -145,8 +144,8 @@ func parseDuration(text string) time.Duration {
 
 // advance plays the next track of the queue, and stops at the end of it.
 func (a *app) advance() {
-	if a.index+1 < len(a.queue) {
-		a.index++
+	if next, ok := a.nextIndex(); ok {
+		a.index = next
 		a.start(a.queue[a.index])
 		return
 	}
@@ -176,87 +175,6 @@ func (a *app) togglePlay() {
 	a.player.Toggle()
 }
 
-// playerBar shows the current track and its controls, along the bottom of
-// the window.
-func (a *app) playerBar(c *ui.Context) {
-	t := c.Theme()
-	ui.Row(c).Height(74).Padding(10, 16).Gap(14).AlignItems(ui.Center).
-		Background(t.Background).BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
-		ui.Image(c, a.thumbs.bitmap(a.current.Thumbnail, 96)).Size(46, 46).Fit(ui.Cover).Background(t.Surface).Shrink(0)
-		ui.Column(c).Width(200).Shrink(0).Gap(2).Children(func() {
-			ui.Text(c, a.current.Title).SingleLine()
-			line, color := a.current.Subtitle, t.TextMuted
-			if a.playErr != "" {
-				line, color = a.playErr, t.Danger
-			}
-			ui.Text(c, line).SingleLine().FontSize(12).TextColor(color)
-		})
-		if transportButton(c, "Previous", "Previous", previousIcon, false) {
-			a.previous()
-		}
-		if transportButton(c, "Play or pause", playPauseTip(a), playPauseIcon(a), a.player.Playing()) {
-			a.togglePlay()
-		}
-		if transportButton(c, "Next", "Next", nextIcon, false) {
-			a.advance()
-		}
-		a.scrubber(c)
-		ui.Text(c, clock(a.player.Position())+" / "+clock(a.total)).FontSize(12).TextColor(t.TextMuted).Shrink(0)
-		ui.Icon(c, volumeIcon).FontSize(15).TextColor(t.TextMuted).Shrink(0)
-		if ui.Slider(c, &a.volume, 0, 100).Label("Volume").Width(80).Changed() {
-			a.player.SetVolume(a.volume / 100)
-		}
-	})
-}
-
-// scrubber is the position slider. It follows the player until the user
-// takes it, and seeks when they let go.
-func (a *app) scrubber(c *ui.Context) {
-	known := a.total > 0
-	total := a.total.Seconds()
-	if !known {
-		total, a.scrub = 1, 0
-	}
-	if a.scrub > total {
-		a.scrub = total
-	}
-	slider := ui.Slider(c, &a.scrub, 0, total).Label("Position").Grow(1).MinWidth(80).Disabled(!known)
-	if slider.Pressed() {
-		a.scrubbing = true
-	}
-	if a.scrubbing && !slider.Pressed() {
-		a.scrubbing = false
-		a.player.Seek(time.Duration(a.scrub * float64(time.Second)))
-	}
-}
-
-func playPauseIcon(a *app) *ui.SVG {
-	if a.player.Playing() {
-		return pauseIcon
-	}
-	return playIcon
-}
-
-func playPauseTip(a *app) string {
-	if a.player.Playing() {
-		return "Pause"
-	}
-	return "Play"
-}
-
-// transportButton shows one of the player's controls as an icon button.
-func transportButton(c *ui.Context, label, tip string, shape *ui.SVG, primary bool) bool {
-	var button ui.Element
-	if primary {
-		button = ui.PrimaryButton(c, "")
-	} else {
-		button = ui.Button(c, "")
-	}
-	button.Label(label).Tooltip(tip).Padding(8)
-	button.Children(func() { ui.Icon(c, shape).FontSize(15) })
-	return button.Clicked()
-}
-
 // clock formats a position as "3:42" or "1:02:03".
 func clock(d time.Duration) string {
 	if d < 0 {
@@ -268,4 +186,84 @@ func clock(d time.Duration) string {
 		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, seconds)
 	}
 	return fmt.Sprintf("%d:%02d", minutes, seconds)
+}
+
+// shufflePage turns shuffle on and plays the page from a song picked at
+// random.
+func (a *app) shufflePage() {
+	if len(a.playable) == 0 {
+		return
+	}
+	a.shuffle = true
+	i := rand.IntN(len(a.playable))
+	a.play(a.playable[i], a.playable, i)
+}
+
+// setVolume sets the volume, from 0 to 100, and keeps it for the next run.
+func (a *app) setVolume(v float64) {
+	a.volume = min(max(v, 0), 100)
+	a.player.SetVolume(a.volume / 100)
+	a.settings.Volume = a.volume
+}
+
+// toggleMute silences the player, or brings the volume back.
+func (a *app) toggleMute() {
+	if a.volume > 0 {
+		a.muted = a.volume
+		a.setVolume(0)
+		return
+	}
+	a.setVolume(max(a.muted, 40))
+}
+
+// cycleRepeat goes from not repeating to repeating the queue to repeating the
+// track and back.
+func (a *app) cycleRepeat() { a.repeat = (a.repeat + 1) % 3 }
+
+// lyricsState is the lyrics of the track playing, as far as they are loaded.
+type lyricsState struct {
+	videoID string
+	loading bool
+	text    string
+	footer  string
+	err     string
+}
+
+// loadLyrics fetches the lyrics of the current track, once.
+func (a *app) loadLyrics() {
+	id := a.current.VideoID
+	if id == "" || a.lyrics.videoID == id || a.client() == nil {
+		return
+	}
+	a.lyrics = lyricsState{videoID: id, loading: true}
+	a.run(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		lyrics, err := a.client().GetLyrics(ctx, id)
+		a.update(func() {
+			if a.lyrics.videoID != id {
+				return
+			}
+			a.lyrics.loading = false
+			if err != nil {
+				a.lyrics.err = "No lyrics for this song."
+				return
+			}
+			a.lyrics.text, a.lyrics.footer = strings.TrimSpace(lyrics.Description), lyrics.Footer
+			if a.lyrics.text == "" {
+				a.lyrics.err = "No lyrics for this song."
+			}
+		})
+	})
+}
+
+// followArtwork takes the theme's seed from the artwork of the track playing,
+// when the user asked for it.
+func (a *app) followArtwork() {
+	if !a.settings.Dynamic || a.current.Thumbnail == "" {
+		return
+	}
+	if colour, ok := a.thumbs.colour(a.current.Thumbnail, playerArt); ok {
+		a.dynamic, a.dynamicOK = colour, true
+	}
 }

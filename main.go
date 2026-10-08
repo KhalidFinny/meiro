@@ -1,19 +1,24 @@
-// Meiro is a small desktop client for YouTube Music, drawn by MyGo itself.
+// Meiro is a small desktop client for YouTube Music, drawn by MyGo itself in
+// Material 3 Expressive.
 //
 // It browses the public catalogue with the youtube package, and the
 // account's library once the user signs in with their Google account.
 // Playback resolves a stream URL and decodes it in a child ffmpeg; see
-// package player.
+// package player. The interface is built from the components of package m3,
+// which take their colours, shapes and motion from one theme.
 package main
 
 import (
 	"context"
 	"log"
+	"math/rand/v2"
+	"path/filepath"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"github.com/elianiva/meiro/m3"
 	"github.com/elianiva/meiro/player"
 	"github.com/elianiva/meiro/youtube"
 )
@@ -39,23 +44,44 @@ type app struct {
 	signedIn bool
 	signIn   signInState
 
+	// What the user chose, and where it is kept; empty keeps nothing.
+	settings     settings
+	settingsPath string
+	// The theme being shown. A change of colours glides from one scheme to
+	// the next rather than cutting.
+	shown     *m3.Theme
+	themeTo   *m3.Theme
+	themeFrom m3.Scheme
+	themeAt   time.Time
+	// dynamic is the seed taken from the artwork playing.
+	dynamic   ui.Color
+	dynamicOK bool
+
 	// The page shown, and what it holds.
-	location string
-	feed     pageState
-	search   searchState
-	rows     []row
-	playable []youtube.MusicItem
-	list     ui.ListState
-	selected int
-	// layout is how the list draws its rows, and gridWidth the room the
-	// cards of the grid layout had in the last frame; see layouts.go.
-	layout    int
-	gridWidth float32
+	location    string
+	feed        pageState
+	search      searchState
+	focusSearch bool
+	rows        []row
+	playable    []youtube.MusicItem
+	list        ui.ListState
 	// detail is the heading of the album, playlist or artist page shown,
 	// and details remembers one for each page the user opened, so going
 	// back to one finds its heading again.
 	detail  detail
 	details map[string]detail
+	// carousels keep the scroll of each shelf.
+	carousels map[string]*m3.CarouselState
+	menuOpen  bool
+
+	// The full-screen player, and what its side panel shows.
+	npOpen      bool
+	npTab       int
+	npQueueOnly bool
+	queueList   ui.ListState
+	queueFollow string
+	volumeHeld  bool
+	lyrics      lyricsState
 
 	// Playback.
 	current   youtube.MusicItem
@@ -65,6 +91,9 @@ type app struct {
 	scrub     float64
 	scrubbing bool
 	volume    float64
+	muted     float64 // the volume to return to, while muted
+	shuffle   bool
+	repeat    int // 0 off, 1 the queue, 2 the track
 	playErr   string
 
 	// job numbers page loads, so a slow one for a page the user has left
@@ -78,17 +107,19 @@ type detail struct {
 	title    string
 	subtitle string
 	art      string
+	kind     string
 }
 
 func newApp() *app {
 	a := &app{
-		router:   ui.NewRouter("/home"),
-		player:   player.New(),
-		selected: -1,
-		volume:   70,
-		search:   searchState{kind: "All"},
-		details:  make(map[string]detail),
+		router:    ui.NewRouter("/home"),
+		player:    player.New(),
+		settings:  defaultSettings(),
+		search:    searchState{},
+		details:   make(map[string]detail),
+		carousels: make(map[string]*m3.CarouselState),
 	}
+	a.volume = a.settings.Volume
 	a.run = func(work func()) { go work() }
 	a.thumbs = newThumbCache(a.refresh)
 	a.player.SetVolume(a.volume / 100)
@@ -100,13 +131,14 @@ func main() {
 	mygo.App.WhenReady(func() {
 		a.setup()
 		a.win = mygo.NewWindow(mygo.WindowOptions{
-			Title:     "Meiro",
-			Width:     1080,
-			Height:    720,
-			MinWidth:  760,
-			MinHeight: 480,
-			StateKey:  "meiro",
-			Content:   ui.View(a.view),
+			Title:         "Meiro",
+			Width:         1180,
+			Height:        760,
+			MinWidth:      860,
+			MinHeight:     560,
+			StateKey:      "meiro",
+			TitleBarStyle: mygo.TitleBarHidden,
+			Content:       ui.View(a.view),
 		})
 	})
 	if err := mygo.App.Run(); err != nil {
@@ -114,9 +146,15 @@ func main() {
 	}
 }
 
-// setup prepares the account: the token store, the two clients, and the
-// sign-in an earlier run left behind.
+// setup prepares the account and the settings: the token store, the two
+// clients, and the sign-in an earlier run left behind.
 func (a *app) setup() {
+	if directory, err := mygo.App.Path(mygo.PathUserData); err == nil {
+		a.settingsPath = filepath.Join(directory, "settings.json")
+		a.settings = loadSettings(a.settingsPath)
+		a.volume = a.settings.Volume
+		a.player.SetVolume(a.volume / 100)
+	}
 	store, err := newTokenStore()
 	if err != nil {
 		a.signIn.err = err.Error()
@@ -127,6 +165,19 @@ func (a *app) setup() {
 	a.public = youtube.NewClient(youtube.Options{})
 	a.authed = youtube.NewClient(youtube.Options{OAuth: a.oauth})
 	a.restoreAccount()
+}
+
+// saveSettings keeps the settings, off the main thread.
+func (a *app) saveSettings() {
+	if a.settingsPath == "" {
+		return
+	}
+	s, path := a.settings, a.settingsPath
+	go func() {
+		if err := s.save(path); err != nil {
+			log.Printf("saving settings: %v", err)
+		}
+	}()
 }
 
 // client returns the client to use for a request: the account's when the
@@ -155,44 +206,37 @@ func (a *app) refresh() {
 	}
 }
 
-// view builds the window: the sidebar, the page the router shows, and the
-// player bar.
-func (a *app) view(c *ui.Context) {
-	monoTheme(c)
-	if location := a.router.Location(); location != a.location {
-		a.location = location
-		a.onNavigate()
+// resolveTheme returns the theme to draw this frame with: the one the
+// settings describe, glided to from the one before when it changed.
+func (a *app) resolveTheme(c *ui.Context) *m3.Theme {
+	cfg := a.settings.config()
+	if a.settings.Dynamic && a.dynamicOK {
+		cfg.Seed = a.dynamic
 	}
-	a.tick(c)
-	if !a.signIn.open && a.signIn.cancel != nil {
-		a.signIn.cancel()
-		a.signIn.cancel = nil
+	target := m3.New(cfg, c.Theme().Dark)
+	if a.themeTo == nil {
+		a.themeTo, a.shown = target, target
+		a.themeFrom = target.Scheme
+		return target
 	}
-
-	ui.Column(c).Fill().Children(func() {
-		ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
-			a.sidebar(c)
-			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-				a.page(c)
-			})
-		})
-		if a.current.VideoID != "" {
-			a.playerBar(c)
+	if target.Config != a.themeTo.Config || target.Dark != a.themeTo.Dark {
+		a.themeFrom = a.shown.Scheme
+		a.themeTo, a.themeAt = target, c.Now()
+		if c.Preferences().ReduceMotion {
+			a.themeAt = time.Time{} // no glide: cut to the new colours
 		}
-	})
-	a.signInModal(c)
-
-	// The transport, wherever the keyboard focus is that does not want the
-	// keys itself.
-	if c.Shortcut(0, ui.KeySpace) {
-		a.togglePlay()
 	}
-	if c.Shortcut(ui.Cmd, ui.KeyLeft) {
-		a.previous()
+	const glide = 420 * time.Millisecond
+	k := float32(c.Now().Sub(a.themeAt)) / float32(glide)
+	if k >= 1 || a.themeAt.IsZero() {
+		a.shown = a.themeTo
+		return a.shown
 	}
-	if c.Shortcut(ui.Cmd, ui.KeyRight) {
-		a.advance()
-	}
+	shown := *a.themeTo
+	shown.Scheme = a.themeFrom.Mix(a.themeTo.Scheme, 1-(1-k)*(1-k)*(1-k))
+	a.shown = &shown
+	c.AnimationFrame()
+	return a.shown
 }
 
 // tick advances what the frame depends on: the player's position, the next
@@ -206,7 +250,7 @@ func (a *app) tick(c *ui.Context) {
 		return
 	}
 	if a.player.Ended() {
-		a.advance()
+		a.trackEnded()
 		return
 	}
 	if a.player.Playing() {
@@ -217,70 +261,32 @@ func (a *app) tick(c *ui.Context) {
 	}
 }
 
-func (a *app) sidebar(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Width(210).Background(t.Surface).PaddingY(10).Gap(6).Shrink(0).Children(func() {
-		ui.Text(c, "Meiro").FontSize(15).Bold().Padding(6, 16, 8)
-		page := navPage(a.router.Path())
-		if ui.Sidebar(c, &page, func() {
-			ui.SidebarItem(c, "home", homeIcon, "Home")
-			ui.SidebarItem(c, "explore", exploreIcon, "Explore")
-			ui.SidebarItem(c, "library", libraryIcon, "Library")
-			ui.SidebarItem(c, "search", searchIcon, "Search")
-		}).Grow(1).Label("Pages").Changed() {
-			a.router.Push("/" + page)
+// trackEnded moves on when a track finishes: it repeats, or plays the next
+// one, or stops at the end of the queue.
+func (a *app) trackEnded() {
+	if a.repeat == 2 {
+		a.start(a.current)
+		return
+	}
+	a.advance()
+}
+
+// nextIndex returns the place of the track that follows the current one in
+// the queue, and false when the queue is over.
+func (a *app) nextIndex() (int, bool) {
+	switch {
+	case len(a.queue) == 0:
+		return 0, false
+	case a.shuffle && len(a.queue) > 1:
+		for {
+			if i := rand.IntN(len(a.queue)); i != a.index {
+				return i, true
+			}
 		}
-		a.accountPanel(c)
-	})
-}
-
-// navPage returns the sidebar item a path belongs to, and "" for a page the
-// sidebar does not name, as an album or a playlist.
-func navPage(path string) string {
-	switch path {
-	case "/home", "/explore", "/library", "/search":
-		return path[1:]
+	case a.index+1 < len(a.queue):
+		return a.index + 1, true
+	case a.repeat == 1:
+		return 0, true
 	}
-	return ""
-}
-
-// monoTheme replaces the theme's colors with a black and white palette that
-// still follows the desktop's light or dark appearance.
-func monoTheme(c *ui.Context) {
-	t := *c.Theme()
-	if t.Dark {
-		t.Background = ui.Hex("#0a0a0a")
-		t.Surface = ui.Hex("#141414")
-		t.SurfaceHover = ui.Hex("#1f1f1f")
-		t.SurfacePressed = ui.Hex("#2a2a2a")
-		t.Border = ui.Hex("#262626")
-		t.Text = ui.Hex("#fafafa")
-		t.TextMuted = ui.Hex("#8c8c8c")
-		t.Accent = ui.Hex("#fafafa")
-		t.AccentHover = ui.Hex("#e5e5e5")
-		t.AccentPressed = ui.Hex("#d4d4d4")
-		t.AccentText = ui.Hex("#0a0a0a")
-		t.Selection = ui.RGBA(250, 250, 250, 0.22)
-		t.Focus = ui.RGBA(250, 250, 250, 0.5)
-		t.Scrollbar = ui.RGBA(255, 255, 255, 0.28)
-	} else {
-		t.Background = ui.Hex("#ffffff")
-		t.Surface = ui.Hex("#f5f5f5")
-		t.SurfaceHover = ui.Hex("#ededed")
-		t.SurfacePressed = ui.Hex("#e0e0e0")
-		t.Border = ui.Hex("#e6e6e6")
-		t.Text = ui.Hex("#0a0a0a")
-		t.TextMuted = ui.Hex("#737373")
-		t.Accent = ui.Hex("#0a0a0a")
-		t.AccentHover = ui.Hex("#262626")
-		t.AccentPressed = ui.Hex("#404040")
-		t.AccentText = ui.Hex("#ffffff")
-		t.Selection = ui.RGBA(10, 10, 10, 0.16)
-		t.Focus = ui.RGBA(10, 10, 10, 0.4)
-		t.Scrollbar = ui.RGBA(0, 0, 0, 0.28)
-	}
-	// Square corners everywhere: nothing in the interface has a rounded
-	// border.
-	t.Radius = 0
-	c.SetTheme(&t)
+	return 0, false
 }
