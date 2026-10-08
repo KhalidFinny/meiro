@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -243,10 +242,6 @@ func cloneURLValues(values url.Values) url.Values {
 func (decoder *playerDecipher) getNSigScript() (string, error) {
 	decoder.nsigOnce.Do(func() {
 		decoder.nsigScript, decoder.nsigErr = extractNSigScript(decoder.source)
-		// Parsing the script builds a syntax tree many times its size. The
-		// runtime would hold its memory back for a while after the tree is
-		// gone, so give it back now.
-		debug.FreeOSMemory()
 	})
 	if decoder.nsigErr != nil {
 		return "", decoder.nsigErr

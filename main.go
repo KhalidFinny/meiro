@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"path/filepath"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -149,6 +150,24 @@ func newApp() *app {
 	a.thumbs = newThumbCache(a.refresh)
 	a.player.SetVolume(a.volume / 100)
 	return a
+}
+
+// lastReclaim is when reclaimMemory last ran, in Unix nanoseconds.
+var lastReclaim atomic.Int64
+
+// reclaimMemory gives the runtime's free memory back to the system. Reading a
+// page, or YouTube's player script, builds far more garbage than it keeps, and
+// the runtime would sit on that memory for a while after. It is for the app
+// to ask, not the youtube package, and no more than every few seconds, for a
+// run of loads costs one collection.
+func reclaimMemory() {
+	const every = 5 * time.Second
+	now := time.Now().UnixNano()
+	last := lastReclaim.Load()
+	if now-last < int64(every) || !lastReclaim.CompareAndSwap(last, now) {
+		return
+	}
+	debug.FreeOSMemory()
 }
 
 func main() {

@@ -516,12 +516,12 @@ func TestExtractMusicItemsKeepsASongListedTwice(t *testing.T) {
 			`"flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Song"}]}}}]}}`
 	}
 	twice := []byte(`{"contents":[` + entry("S1") + `,` + entry("S2") + `]}`)
-	if got := extractMusicItems(twice); len(got) != 2 {
+	if got := extractMusicItems(decodeResponse(twice), false); len(got) != 2 {
 		t.Errorf("a playlist holding a song twice gave %d items, want 2", len(got))
 	}
 	// The same entry met twice, as a response may repeat one, stays one.
 	repeated := []byte(`{"contents":[` + entry("S1") + `,` + entry("S1") + `]}`)
-	if got := extractMusicItems(repeated); len(got) != 1 {
+	if got := extractMusicItems(decodeResponse(repeated), false); len(got) != 1 {
 		t.Errorf("a repeated entry gave %d items, want 1", len(got))
 	}
 }

@@ -177,9 +177,7 @@ func (c *Client) Search(ctx context.Context, query string, options SearchOptions
 	if err != nil {
 		return nil, err
 	}
-	return &SearchResult{
-		Items: c.trimItems(extractMusicItems(raw)), ContinuationToken: continuationToken(raw), Raw: raw,
-	}, nil
+	return c.newSearchResult(raw), nil
 }
 
 func musicSearchParams(kind SearchType) (string, error) {
@@ -267,9 +265,7 @@ func (c *Client) ContinueSearch(ctx context.Context, token string) (*SearchResul
 	if err != nil {
 		return nil, err
 	}
-	return &SearchResult{
-		Items: c.trimItems(extractMusicItems(raw)), ContinuationToken: continuationToken(raw), Raw: raw,
-	}, nil
+	return c.newSearchResult(raw), nil
 }
 
 func (c *Client) GetArtist(ctx context.Context, artistID string) (*BrowseResult, error) {
@@ -590,37 +586,32 @@ func findRenderer(raw json.RawMessage, rendererName string) map[string]any {
 	return walk(root)
 }
 
+// newBrowseResult reads a browse response. The response is parsed once, and
+// everything taken from it is read off that one tree.
 func (c *Client) newBrowseResult(raw json.RawMessage) *BrowseResult {
+	root := decodeResponse(raw)
 	return &BrowseResult{
-		Items: c.trimItems(extractMusicItems(raw)), Sections: c.trimSections(extractMusicSections(raw)),
-		ContinuationToken: continuationToken(raw), Pages: []json.RawMessage{raw}, Raw: raw,
+		Items: extractMusicItems(root, c.keepRenderers), Sections: extractMusicSections(root, c.keepRenderers),
+		ContinuationToken: continuationToken(root), Pages: []json.RawMessage{raw}, Raw: raw,
 	}
 }
 
-// trimItems drops the renderer JSON of each item, unless the client was asked
-// to keep it. It is the same data the item's other fields were read from, and
-// a list of a few hundred items holds hundreds of kilobytes of it.
-func (c *Client) trimItems(items []MusicItem) []MusicItem {
-	if c.keepRenderers {
-		return items
+// newSearchResult reads a search response, as newBrowseResult does a browse.
+func (c *Client) newSearchResult(raw json.RawMessage) *SearchResult {
+	root := decodeResponse(raw)
+	return &SearchResult{
+		Items: extractMusicItems(root, c.keepRenderers), ContinuationToken: continuationToken(root), Raw: raw,
 	}
-	for i := range items {
-		items[i].Raw = nil
-	}
-	return items
 }
 
-// trimSections is trimItems for the items of each section, and for the
-// sections' own renderers, which hold every one of those items again.
-func (c *Client) trimSections(sections []MusicSection) []MusicSection {
-	if c.keepRenderers {
-		return sections
+// decodeResponse parses a response into the generic form the extractors walk,
+// and gives nil, which they read as empty, for what is not JSON.
+func decodeResponse(raw json.RawMessage) any {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return nil
 	}
-	for i := range sections {
-		sections[i].Raw = nil
-		c.trimItems(sections[i].Items)
-	}
-	return sections
+	return root
 }
 
 func browseContinuations(result *BrowseResult) []string {
@@ -636,11 +627,7 @@ func browseContinuations(result *BrowseResult) []string {
 	return tokens
 }
 
-func continuationToken(raw json.RawMessage) string {
-	var root any
-	if json.Unmarshal(raw, &root) != nil {
-		return ""
-	}
+func continuationToken(root any) string {
 	var walk func(any) string
 	walk = func(value any) string {
 		switch node := value.(type) {
@@ -676,11 +663,7 @@ func continuationToken(raw json.RawMessage) string {
 	return walk(root)
 }
 
-func extractMusicSections(raw json.RawMessage) []MusicSection {
-	var root any
-	if json.Unmarshal(raw, &root) != nil {
-		return nil
-	}
+func extractMusicSections(root any, keep bool) []MusicSection {
 	var sections []MusicSection
 	var walk func(any)
 	walk = func(value any) {
@@ -694,11 +677,14 @@ func extractMusicSections(raw json.RawMessage) []MusicSection {
 				child := node[key]
 				if key == "musicShelfRenderer" || key == "musicPlaylistShelfRenderer" || key == "gridRenderer" || key == "musicCarouselShelfRenderer" {
 					if renderer, ok := child.(map[string]any); ok {
-						data, _ := json.Marshal(renderer)
-						sections = append(sections, MusicSection{
+						section := MusicSection{
 							Title: rendererTitle(renderer), Kind: key,
-							Items: extractMusicItems(data), ContinuationToken: continuationToken(data), Raw: data,
-						})
+							Items: extractMusicItems(renderer, keep), ContinuationToken: continuationToken(renderer),
+						}
+						if keep {
+							section.Raw = marshalRenderer(renderer)
+						}
+						sections = append(sections, section)
 					}
 					continue
 				}
@@ -808,6 +794,16 @@ func hasAccountChannelFields(value map[string]any) bool {
 	return false
 }
 
+// marshalRenderer is the JSON a renderer was read from, for a client that
+// keeps it. A tree that came from JSON can be written back as JSON.
+func marshalRenderer(renderer map[string]any) json.RawMessage {
+	data, err := json.Marshal(renderer)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
 func rendererBool(value any) bool {
 	result, _ := value.(bool)
 	return result
@@ -822,11 +818,7 @@ func sortedKeys(object map[string]any) []string {
 	return keys
 }
 
-func extractMusicItems(raw json.RawMessage) []MusicItem {
-	var root any
-	if json.Unmarshal(raw, &root) != nil {
-		return nil
-	}
+func extractMusicItems(root any, keep bool) []MusicItem {
 	var items []MusicItem
 	seen := make(map[string]struct{})
 	var walk func(any)
@@ -847,7 +839,7 @@ func extractMusicItems(raw json.RawMessage) []MusicItem {
 				kind, ok := rendererKind(key)
 				if ok {
 					if renderer, ok := child.(map[string]any); ok {
-						item := parseMusicItem(kind, renderer)
+						item := parseMusicItem(kind, renderer, keep)
 						// A playlist may hold a song twice; its entries differ by
 						// the ID the playlist gave each, which keeps both.
 						identity := strings.Join([]string{
@@ -893,7 +885,7 @@ func rendererKind(key string) (string, bool) {
 	}
 }
 
-func parseMusicItem(kind string, renderer map[string]any) MusicItem {
+func parseMusicItem(kind string, renderer map[string]any, keep bool) MusicItem {
 	item := MusicItem{Kind: kind}
 	item.Title = rendererText(renderer["title"])
 	if item.Title == "" {
@@ -939,8 +931,9 @@ func parseMusicItem(kind string, renderer map[string]any) MusicItem {
 		// thumbnail.
 		item.Thumbnail = rendererThumbnail(renderer)
 	}
-	data, _ := json.Marshal(renderer)
-	item.Raw = data
+	if keep {
+		item.Raw = marshalRenderer(renderer)
+	}
 	return item
 }
 

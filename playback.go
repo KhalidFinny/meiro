@@ -75,6 +75,7 @@ func (a *app) stream(item youtube.MusicItem) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		streamURL, total, err := resolveStream(ctx, client, item)
+		defer reclaimMemory()
 		a.update(func() {
 			if gen != a.streamGen {
 				return // another track was chosen while this one resolved
