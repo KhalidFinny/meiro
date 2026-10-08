@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestCountingReaderCountsAndRemembersTheEnd(t *testing.T) {
-	reader := &countingReader{reader: strings.NewReader("abcdef")}
+	reader := newCountingReader(strings.NewReader("abcdef"))
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatal(err)
@@ -84,5 +86,68 @@ func TestBoundedBufferNeverGrowsPastItsLimit(t *testing.T) {
 	}
 	if len(buffer.String()) != 8 {
 		t.Errorf("buffer holds %d bytes, want 8", len(buffer.String()))
+	}
+}
+
+func TestFailureIgnoresACleanExitAfterSound(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	source := newCountingReader(strings.NewReader(""))
+	s := &session{source: source, stderr: &boundedBuffer{limit: 16}, done: done}
+	p := &Player{session: s}
+
+	if got := p.Failure(); got == "" {
+		t.Error("ffmpeg exiting before any sound should be a failure")
+	}
+	source.read.Store(1024)
+	if got := p.Failure(); got != "" {
+		t.Errorf("a clean exit after sound is the track ending, got failure %q", got)
+	}
+	s.waitErr = errors.New("exit status 1")
+	if got := p.Failure(); got == "" {
+		t.Error("ffmpeg dying with an error is a failure")
+	}
+}
+
+// ffmpeg exits while samples are still in the pipe; the reader must still get
+// all of them, and then the end.
+func TestSessionReadsEverythingAfterTheProcessExits(t *testing.T) {
+	const size = 1 << 20
+	cmd := exec.Command("head", "-c", strconv.Itoa(size), "/dev/zero")
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	s := &session{
+		cmd: cmd, pipe: pipe, stderr: &boundedBuffer{limit: 16},
+		source: newCountingReader(pipe), done: make(chan struct{}), quit: make(chan struct{}),
+	}
+	p := &Player{session: s}
+	go p.reap(s)
+
+	// Take all but the last few bytes, and let the process exit with those
+	// still in the pipe, as ffmpeg does a moment before the track ends.
+	head := make([]byte, size-1024)
+	if _, err := io.ReadFull(s.source, head); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	rest, err := io.ReadAll(s.source)
+	if err != nil || len(rest) != 1024 {
+		t.Fatalf("read %d of the last 1024 bytes, err %v", len(rest), err)
+	}
+	if !s.source.eof.Load() {
+		t.Error("the end of the stream was not reached")
+	}
+	select {
+	case <-s.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the process was never reaped")
+	}
+	if got := p.Failure(); got != "" {
+		t.Errorf("failure %q after a clean end", got)
 	}
 }

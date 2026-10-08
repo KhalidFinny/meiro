@@ -243,6 +243,14 @@ func (p *Player) Failure() string {
 	default:
 		return ""
 	}
+	// ffmpeg decodes faster than the track plays, so it exits cleanly a little
+	// before the end. That is the stream finishing, which Ended reports.
+	p.mu.Lock()
+	finished := s.waitErr == nil && s.source.read.Load() > 0
+	p.mu.Unlock()
+	if finished {
+		return ""
+	}
 	message := strings.TrimSpace(s.stderr.String())
 	if message == "" {
 		message = "ffmpeg stopped"
@@ -298,8 +306,8 @@ func (p *Player) startLocked(url string, at time.Duration, paused bool) error {
 
 	s := &session{
 		url: url, cmd: cmd, pipe: pipe, stderr: stderr,
-		source: &countingReader{reader: pipe},
-		offset: at, paused: paused, done: make(chan struct{}),
+		source: newCountingReader(pipe),
+		offset: at, paused: paused, done: make(chan struct{}), quit: make(chan struct{}),
 	}
 	s.out = audioCtx.NewPlayer(s.source)
 	s.out.SetVolume(p.volume)
@@ -307,14 +315,24 @@ func (p *Player) startLocked(url string, at time.Duration, paused bool) error {
 		s.out.Play()
 	}
 	p.session = s
-	go func() {
-		waitErr := cmd.Wait()
-		p.mu.Lock()
-		s.waitErr = waitErr
-		p.mu.Unlock()
-		close(s.done)
-	}()
+	go p.reap(s)
 	return nil
+}
+
+// reap waits for ffmpeg to exit and records how, then marks the session done.
+func (p *Player) reap(s *session) {
+	// Wait closes the pipe once ffmpeg has exited, which would cut off the
+	// samples still in it and keep the stream from ever reaching its end. So
+	// wait for the reader to have taken them all, or for the stop.
+	select {
+	case <-s.source.finished:
+	case <-s.quit:
+	}
+	waitErr := s.cmd.Wait()
+	p.mu.Lock()
+	s.waitErr = waitErr
+	p.mu.Unlock()
+	close(s.done)
 }
 
 // stopLocked ends the current stream, if any, and assumes the caller holds
@@ -326,6 +344,7 @@ func (p *Player) stopLocked() {
 	}
 	p.session = nil
 	s.stopped = true
+	close(s.quit)
 	s.out.PauseAndStopReading()
 	_ = s.pipe.Close()
 	if s.cmd.Process != nil {
@@ -372,6 +391,8 @@ type session struct {
 	source *countingReader
 	out    *oto.Player
 	done   chan struct{}
+	// quit is closed when the app stops the decode.
+	quit chan struct{}
 
 	// offset is where in the track this decode began.
 	offset time.Duration
@@ -387,13 +408,23 @@ type countingReader struct {
 	reader io.Reader
 	read   atomic.Int64
 	eof    atomic.Bool
+	// finished is closed when a read fails or reaches the end.
+	finished chan struct{}
+	once     sync.Once
+}
+
+func newCountingReader(reader io.Reader) *countingReader {
+	return &countingReader{reader: reader, finished: make(chan struct{})}
 }
 
 func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.reader.Read(p)
 	c.read.Add(int64(n))
-	if errors.Is(err, io.EOF) {
-		c.eof.Store(true)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			c.eof.Store(true)
+		}
+		c.once.Do(func() { close(c.finished) })
 	}
 	return n, err
 }
