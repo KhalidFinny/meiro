@@ -2,6 +2,51 @@
 
 A small native desktop counter built with [MyGo](https://mygo.egoist.dev/).
 
+## YouTube Music client
+
+The independent [`youtube`](youtube) package is a read-only YouTube Music
+client. It supports OAuth device login and token refresh, account details,
+music search, home and explore feeds, the signed-in library, artist/album/
+playlist browsing, track metadata and stream formats, the up-next queue, and
+search suggestions. InnerTube responses are also exposed as raw JSON to keep
+the package useful as the upstream response formats evolve.
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/elianiva/meiro/youtube"
+)
+
+func searchMusic(ctx context.Context) error {
+	oauth := youtube.NewOAuth(youtube.OAuthConfig{})
+	code, err := oauth.BeginDeviceFlow(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Open %s and enter %s\n", code.VerificationURL, code.UserCode)
+	if _, err := oauth.PollForTokens(ctx, code); err != nil {
+		return err
+	}
+
+	music := youtube.NewClient(youtube.Options{OAuth: oauth})
+	results, err := music.Search(ctx, "ambient", youtube.SearchOptions{Type: youtube.SearchSongs})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Found %d songs\n", len(results.Items))
+	return nil
+}
+```
+
+Public music metadata does not require OAuth. Account and library calls do. The
+client does not make playlist or account changes. YouTube may return encrypted
+stream signatures; those formats are preserved, while `BestAudioFormat`
+selects the best directly playable audio URL when one is available. The package
+does not include an audio decoder/player or JavaScript player-script
+deciphering yet.
+
 ## Run
 
 ```sh
