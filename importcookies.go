@@ -97,7 +97,7 @@ func firstSession(ctx context.Context, label string, places []string, read func(
 // ytDlpCookie has yt-dlp read the cookies of one browser, or profile, and
 // returns the Cookie header for YouTube they make.
 func ytDlpCookie(ctx context.Context, spec string) (string, error) {
-	path, err := exec.LookPath("yt-dlp")
+	path, err := toolPath("yt-dlp")
 	if err != nil {
 		return "", errors.New("importing needs yt-dlp on PATH")
 	}

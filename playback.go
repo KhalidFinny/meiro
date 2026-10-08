@@ -93,7 +93,7 @@ func (a *app) resolveStream(ctx context.Context, item youtube.MusicItem) (string
 
 // ytDlpStream asks yt-dlp for a direct audio URL.
 func ytDlpStream(ctx context.Context, videoID string) (string, time.Duration, error) {
-	path, err := exec.LookPath("yt-dlp")
+	path, err := toolPath("yt-dlp")
 	if err != nil {
 		return "", 0, errors.New("playing needs ffmpeg and yt-dlp on PATH")
 	}

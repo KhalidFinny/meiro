@@ -57,10 +57,23 @@ type Player struct {
 	audioErr  error
 }
 
+// Option configures a Player.
+type Option func(*Player)
+
+// WithFFmpeg makes the player decode with the ffmpeg at path, instead of the
+// one on PATH.
+func WithFFmpeg(path string) Option {
+	return func(p *Player) { p.ffmpegPath = path }
+}
+
 // New creates a player that is not yet playing anything. It does not touch
 // the audio device or the file system.
-func New() *Player {
-	return &Player{volume: 1}
+func New(options ...Option) *Player {
+	p := &Player{volume: 1}
+	for _, option := range options {
+		option(p)
+	}
+	return p
 }
 
 // Available reports whether the player can play at all: it needs ffmpeg.
@@ -305,7 +318,9 @@ func (p *Player) stopLocked() {
 
 func (p *Player) resolveFFmpeg() (string, error) {
 	p.lookOnce.Do(func() {
-		p.ffmpegPath, p.lookErr = exec.LookPath("ffmpeg")
+		if p.ffmpegPath == "" {
+			p.ffmpegPath, p.lookErr = exec.LookPath("ffmpeg")
+		}
 	})
 	if p.lookErr != nil {
 		return "", ErrNoFFmpeg

@@ -111,9 +111,13 @@ type detail struct {
 }
 
 func newApp() *app {
+	var playerOptions []player.Option
+	if ffmpeg, err := toolPath("ffmpeg"); err == nil {
+		playerOptions = append(playerOptions, player.WithFFmpeg(ffmpeg))
+	}
 	a := &app{
 		router:    ui.NewRouter("/home"),
-		player:    player.New(),
+		player:    player.New(playerOptions...),
 		settings:  defaultSettings(),
 		search:    searchState{},
 		details:   make(map[string]detail),

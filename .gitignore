@@ -3,3 +3,6 @@
 mygo_windows_*.syso
 /.amp/portals/*
 /.amp/in/artifacts/
+/resources/darwin-*/
+/resources/linux-*/
+/resources/windows-*/

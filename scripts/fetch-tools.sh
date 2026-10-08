@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Downloads the programs a release ships inside the app, ffmpeg and yt-dlp,
+# into resources/<platform>/, where `mygo build` picks them up.
+#
+#   scripts/fetch-tools.sh darwin-arm64
+#
+# Platforms: darwin-arm64, darwin-amd64, linux-amd64, linux-arm64.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+platform="${1:?usage: fetch-tools.sh <darwin-arm64|darwin-amd64|linux-amd64|linux-arm64>}"
+
+# ffmpeg comes from Jellyfin's portable GPL builds, which are static, carry
+# no non-free parts and come with the source they were built from. Bump the
+# version and the checksums together.
+FFMPEG_VERSION="8.1.3-1"
+ffmpeg_url="https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${FFMPEG_VERSION}"
+
+# yt-dlp breaks whenever YouTube changes, so a release takes the newest one
+# unless YT_DLP_VERSION pins it. Its checksums come from the release itself.
+YT_DLP_VERSION="${YT_DLP_VERSION:-latest}"
+if [[ "$YT_DLP_VERSION" == latest ]]; then
+	ytdlp_url="https://github.com/yt-dlp/yt-dlp/releases/latest/download"
+else
+	ytdlp_url="https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}"
+fi
+
+case "$platform" in
+	darwin-arm64)
+		ffmpeg_asset="macarm64"
+		ffmpeg_sha256="22445d7299742749ad2eeb9ce87963d50def0357e45b3e6c7b69987c8365dbf6"
+		ytdlp_asset="yt-dlp_macos"
+		;;
+	darwin-amd64)
+		ffmpeg_asset="mac64"
+		ffmpeg_sha256="cb2b5c154d49a6b6bfe29fa6c16510e85dcbf60b805764121a167b093d4bb6fb"
+		ytdlp_asset="yt-dlp_macos"
+		;;
+	linux-amd64)
+		ffmpeg_asset="linux64"
+		ffmpeg_sha256="b86dc023c64a5a9a410e6e3a938a970460214fae78f31c1553c9f88f1c289b6a"
+		ytdlp_asset="yt-dlp_linux"
+		;;
+	linux-arm64)
+		ffmpeg_asset="linuxarm64"
+		ffmpeg_sha256="7bc8e8d0986f7f4693f63e9728570f671f07b6e21c05d5465dd7ce461d1631dc"
+		ytdlp_asset="yt-dlp_linux_aarch64"
+		;;
+	*)
+		printf 'Unsupported platform: %s\n' "$platform" >&2
+		exit 1
+		;;
+esac
+
+sha256() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | cut -d ' ' -f 1
+	else
+		shasum -a 256 "$1" | cut -d ' ' -f 1
+	fi
+}
+
+verify() { # file expected
+	local actual
+	actual="$(sha256 "$1")"
+	if [[ "$actual" != "$2" ]]; then
+		printf 'Checksum mismatch for %s\n  expected %s\n  got      %s\n' "$1" "$2" "$actual" >&2
+		exit 1
+	fi
+}
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+out="resources/${platform}"
+rm -rf "$out/bin" "$out/licenses"
+mkdir -p "$out/bin" "$out/licenses"
+
+echo "ffmpeg ${FFMPEG_VERSION} for ${platform}"
+archive="jellyfin-ffmpeg_${FFMPEG_VERSION}_portable_${ffmpeg_asset}-gpl.tar.xz"
+curl -fsSL -o "$work/ffmpeg.tar.xz" "${ffmpeg_url}/${archive}"
+verify "$work/ffmpeg.tar.xz" "$ffmpeg_sha256"
+tar -xJf "$work/ffmpeg.tar.xz" -C "$work" ffmpeg
+install -m 0755 "$work/ffmpeg" "$out/bin/ffmpeg"
+curl -fsSL -o "$out/licenses/ffmpeg-COPYING.GPLv3" \
+	"https://raw.githubusercontent.com/jellyfin/jellyfin-ffmpeg/v${FFMPEG_VERSION}/COPYING.GPLv3"
+
+echo "yt-dlp ${YT_DLP_VERSION} for ${platform}"
+curl -fsSL -o "$work/SHA2-256SUMS" "${ytdlp_url}/SHA2-256SUMS"
+curl -fsSL -o "$work/yt-dlp" "${ytdlp_url}/${ytdlp_asset}"
+expected="$(awk -v name="$ytdlp_asset" '$2 == name || $2 == "*" name { print $1 }' "$work/SHA2-256SUMS")"
+[[ -n "$expected" ]] || { printf 'No checksum for %s\n' "$ytdlp_asset" >&2; exit 1; }
+verify "$work/yt-dlp" "$expected"
+install -m 0755 "$work/yt-dlp" "$out/bin/yt-dlp"
+
+echo "ready in ${out}"
