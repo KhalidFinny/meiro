@@ -322,6 +322,54 @@ func TestPlaylistAndUpNextAreReadOnlyBrowseCalls(t *testing.T) {
 	}
 }
 
+func TestUpNextKeepsPlaylistContextAndContinuesRadioQueue(t *testing.T) {
+	var nextRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/youtubei/v1/next" {
+			t.Fatalf("request path = %q, want /next", r.URL.Path)
+		}
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		switch nextRequests.Add(1) {
+		case 1:
+			if request["videoId"] != "track-1" || request["playlistId"] != "PL123" || request["playlistIndex"] != float64(2) {
+				t.Errorf("initial up-next request = %#v", request)
+			}
+			if request["continuation"] != nil {
+				t.Errorf("initial up-next request unexpectedly has continuation: %#v", request)
+			}
+			_, _ = w.Write([]byte(`{"continuationContents":{"playlistPanelContinuation":{"contents":[{"playlistPanelVideoRenderer":{"videoId":"track-2","title":{"simpleText":"Next song"}}}],"continuations":[{"nextRadioContinuationData":{"continuation":"RADIO_MORE"}}]}}}`))
+		case 2:
+			if request["videoId"] != "track-1" || request["playlistId"] != "PL123" || request["playlistIndex"] != float64(2) || request["continuation"] != "RADIO_MORE" {
+				t.Errorf("continuation request = %#v", request)
+			}
+			_, _ = w.Write([]byte(`{"continuationContents":{"playlistPanelContinuation":{"contents":[{"playlistPanelVideoRenderer":{"videoId":"track-3","title":{"simpleText":"Radio song"}}}]}}}`))
+		default:
+			t.Errorf("unexpected /next request #%d", nextRequests.Load())
+		}
+	}))
+	defer server.Close()
+	client := NewClient(Options{BaseURL: server.URL, APIKey: "key"})
+	index := 2
+	options := UpNextOptions{VideoID: "track-1", PlaylistID: "PL123", PlaylistIndex: &index}
+	next, err := client.GetUpNextWithOptions(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Items) != 1 || next.Items[0].VideoID != "track-2" || next.ContinuationToken != "RADIO_MORE" {
+		t.Fatalf("initial queue = items %#v, continuation %q", next.Items, next.ContinuationToken)
+	}
+	more, err := client.ContinueUpNext(context.Background(), options, next.ContinuationToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(more.Items) != 1 || more.Items[0].VideoID != "track-3" || nextRequests.Load() != 2 {
+		t.Errorf("continued queue = %#v after %d requests", more.Items, nextRequests.Load())
+	}
+}
+
 func TestLyricsRelatedAndRecapUseReadOnlyEndpoints(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request map[string]any

@@ -119,6 +119,17 @@ type TrackInfo struct {
 	Raw           json.RawMessage `json:"raw"`
 }
 
+// UpNextOptions identifies the playback queue whose next items are requested.
+// PlaylistIndex is optional because a single-track radio request has no
+// playlist position. Continuation is set when loading another page of the
+// same queue.
+type UpNextOptions struct {
+	VideoID       string
+	PlaylistID    string
+	PlaylistIndex *int
+	Continuation  string
+}
+
 type VideoDetails struct {
 	VideoID   string `json:"videoId"`
 	Title     string `json:"title"`
@@ -458,14 +469,41 @@ func (track *TrackInfo) BestAudioFormat() (AudioFormat, bool) {
 
 // GetUpNext fetches the read-only queue for a track.
 func (c *Client) GetUpNext(ctx context.Context, videoID string) (*BrowseResult, error) {
-	if strings.TrimSpace(videoID) == "" {
+	return c.GetUpNextWithOptions(ctx, UpNextOptions{VideoID: videoID})
+}
+
+// GetUpNextWithOptions fetches a queue using its playlist position when one
+// exists. Set Continuation to extend the same queue with another /next page.
+func (c *Client) GetUpNextWithOptions(ctx context.Context, options UpNextOptions) (*BrowseResult, error) {
+	if strings.TrimSpace(options.VideoID) == "" {
 		return nil, errors.New("youtube: video ID is required")
 	}
-	raw, err := c.execute(ctx, "next", map[string]any{"videoId": videoID})
+	payload := map[string]any{"videoId": options.VideoID}
+	if options.PlaylistID != "" {
+		payload["playlistId"] = options.PlaylistID
+	}
+	if options.PlaylistIndex != nil {
+		payload["playlistIndex"] = *options.PlaylistIndex
+	}
+	if options.Continuation != "" {
+		payload["continuation"] = options.Continuation
+	}
+	raw, err := c.execute(ctx, "next", payload)
 	if err != nil {
 		return nil, err
 	}
 	return c.newBrowseResult(raw), nil
+}
+
+// ContinueUpNext requests another page of a queue returned by GetUpNext or
+// GetUpNextWithOptions. The video ID and optional playlist fields preserve
+// the context used to create that queue.
+func (c *Client) ContinueUpNext(ctx context.Context, options UpNextOptions, continuation string) (*BrowseResult, error) {
+	if strings.TrimSpace(continuation) == "" {
+		return nil, errors.New("youtube: up-next continuation token is required")
+	}
+	options.Continuation = continuation
+	return c.GetUpNextWithOptions(ctx, options)
 }
 
 // GetSearchSuggestions retrieves suggestion content for a partial query.
