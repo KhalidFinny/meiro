@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -643,5 +645,79 @@ func TestParseSeedIsStrict(t *testing.T) {
 		if _, ok := parseSeed(bad); ok {
 			t.Errorf("%q was taken as a seed", bad)
 		}
+	}
+}
+
+// memoryStore is a cookie store held in memory.
+type memoryStore struct {
+	cookie    string
+	deleteErr error
+}
+
+func (m *memoryStore) Load(context.Context) (string, error) {
+	if m.cookie == "" {
+		return "", errNotSignedIn
+	}
+	return m.cookie, nil
+}
+
+func (m *memoryStore) Save(_ context.Context, cookie string) error { m.cookie = cookie; return nil }
+
+func (m *memoryStore) Delete(context.Context) error { return m.deleteErr }
+
+// The session saved by an earlier run is read in the background. A sign-out
+// that happens meanwhile must not be undone when it lands.
+func TestSignOutIsNotUndoneByARestoreInFlight(t *testing.T) {
+	a := newTestApp()
+	a.newClient = func(*youtube.CookieAuth) *youtube.Client { return a.public }
+	a.store = &memoryStore{cookie: "SAPISID=abc"}
+	a.signedIn, a.authed = false, nil
+	var pending []func()
+	a.run = func(work func()) { pending = append(pending, work) }
+
+	a.restoreAccount()
+	a.signOut()
+	for _, work := range pending[:1] {
+		work()
+	}
+	if a.signedIn {
+		t.Error("a restore that began before the sign-out signed the user back in")
+	}
+}
+
+func TestSignOutSaysWhenTheSessionStays(t *testing.T) {
+	a := newTestApp()
+	a.store = &memoryStore{cookie: "SAPISID=abc", deleteErr: errors.New("the keychain is locked")}
+	a.signedIn = true
+	a.signOut()
+	if a.signedIn {
+		t.Error("the user is still signed in")
+	}
+	if !strings.Contains(a.notice, "keychain is locked") {
+		t.Errorf("the failure was not reported: %q", a.notice)
+	}
+}
+
+func TestDeletingReportsWhatWouldNotGo(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "cookie.txt")
+	system := &fakeKeychain{usable: true, holds: true, removeErr: errors.New("access denied")}
+	store := &keychainStore{system: system, file: newFileStore(path)}
+	if err := store.file.Save(ctx, testCookie); err != nil {
+		t.Fatal(err)
+	}
+	err := store.Delete(ctx)
+	if err == nil || !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("Delete = %v, want the keychain's failure", err)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Error("the file was left behind because the keychain failed")
+	}
+}
+
+func TestCookieHeaderSurvivesNonASCIIText(t *testing.T) {
+	// "İ" is two bytes, and three once lowercased.
+	if got := cookieHeader("İİİİİİİİİİ Cookie: SAPISID=abc"); got != "SAPISID=abc" {
+		t.Errorf("cookieHeader = %q", got)
 	}
 }

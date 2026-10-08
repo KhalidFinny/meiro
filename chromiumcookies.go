@@ -61,7 +61,7 @@ func readChromiumCookies(ctx context.Context, profile string, aesKey []byte) (st
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(directory)
+	defer removeAll(directory)
 	copied := filepath.Join(directory, "Cookies")
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		data, err := os.ReadFile(database + suffix)

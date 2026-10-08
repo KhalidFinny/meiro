@@ -30,6 +30,10 @@ func (a *app) view(c *ui.Context) {
 	}
 	a.tick(c)
 	a.followArtwork()
+	if a.notice != "" {
+		c.Toast(a.notice)
+		a.notice = ""
+	}
 	if !a.signIn.open && a.signIn.cancel != nil {
 		a.signIn.cancel()
 		a.signIn.cancel = nil

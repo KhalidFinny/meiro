@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,26 +34,29 @@ var (
 
 // newCookieStore returns the store the app keeps its sign-in in: the
 // operating system's credential store, with a file only its user can read
-// as the fallback. It also forgets what earlier versions kept there, the
-// OAuth tokens, which nothing reads any more.
+// as the fallback. It does no work itself, so it is cheap to call on the main
+// thread; forgetLegacy, which runs commands, belongs in the background.
 func newCookieStore() (*keychainStore, error) {
 	directory, err := mygo.App.Path(mygo.PathUserData)
 	if err != nil {
 		return nil, err
 	}
-	secret{service: secretService, account: legacyAccount}.remove()
-	_ = os.Remove(filepath.Join(directory, "auth.json"))
-	system := secret{service: secretService, account: secretAccount}
-	return &keychainStore{system: system, file: newFileStore(filepath.Join(directory, "cookie.txt"))}, nil
+	return &keychainStore{
+		system:     secret{service: secretService, account: secretAccount},
+		file:       newFileStore(filepath.Join(directory, "cookie.txt")),
+		legacy:     secret{service: secretService, account: legacyAccount},
+		legacyFile: filepath.Join(directory, "auth.json"),
+	}, nil
 }
 
 // credentialStore is one secret of the operating system's credential store.
 type credentialStore interface {
 	// available reports whether the platform has a store to use.
 	available() bool
-	set(value string) error
-	get() (string, error)
-	remove()
+	set(ctx context.Context, value string) error
+	get(ctx context.Context) (string, error)
+	// remove forgets the secret. A secret that is not there is not a failure.
+	remove(ctx context.Context) error
 }
 
 // secret is a credential in the store the platform provides: the login
@@ -85,7 +89,7 @@ func (s secret) program() string {
 	return path
 }
 
-func (s secret) set(value string) error {
+func (s secret) set(ctx context.Context, value string) error {
 	program := s.program()
 	if program == "" {
 		return errNoCredentialStore
@@ -95,9 +99,9 @@ func (s secret) set(value string) error {
 		// The value is an argument because the tool reads it from a
 		// terminal otherwise, and the app has none. It is briefly visible
 		// in the process list, as it is with every tool that does this.
-		command = exec.Command(program, "add-generic-password", "-U", "-s", s.service, "-a", s.account, "-w", value)
+		command = exec.CommandContext(ctx, program, "add-generic-password", "-U", "-s", s.service, "-a", s.account, "-w", value)
 	} else {
-		command = exec.Command(program, "store", "--label="+s.service, "service", s.service, "account", s.account)
+		command = exec.CommandContext(ctx, program, "store", "--label="+s.service, "service", s.service, "account", s.account)
 		command.Stdin = strings.NewReader(value)
 	}
 	if err := command.Run(); err != nil {
@@ -106,16 +110,16 @@ func (s secret) set(value string) error {
 	return nil
 }
 
-func (s secret) get() (string, error) {
+func (s secret) get(ctx context.Context) (string, error) {
 	program := s.program()
 	if program == "" {
 		return "", errNoCredentialStore
 	}
 	var command *exec.Cmd
 	if runtime.GOOS == "darwin" {
-		command = exec.Command(program, "find-generic-password", "-s", s.service, "-a", s.account, "-w")
+		command = exec.CommandContext(ctx, program, "find-generic-password", "-s", s.service, "-a", s.account, "-w")
 	} else {
-		command = exec.Command(program, "lookup", "service", s.service, "account", s.account)
+		command = exec.CommandContext(ctx, program, "lookup", "service", s.service, "account", s.account)
 	}
 	output, err := command.Output()
 	if err != nil {
@@ -131,28 +135,35 @@ func (s secret) get() (string, error) {
 	return value, nil
 }
 
-// remove forgets the secret. A secret that is not there is not a failure.
-func (s secret) remove() {
+func (s secret) remove(ctx context.Context) error {
 	program := s.program()
 	if program == "" {
-		return
+		return nil
 	}
+	var command *exec.Cmd
 	if runtime.GOOS == "darwin" {
-		_ = exec.Command(program, "delete-generic-password", "-s", s.service, "-a", s.account).Run()
-		return
+		command = exec.CommandContext(ctx, program, "delete-generic-password", "-s", s.service, "-a", s.account)
+	} else {
+		command = exec.CommandContext(ctx, program, "clear", "service", s.service, "account", s.account)
 	}
-	_ = exec.Command(program, "clear", "service", s.service, "account", s.account).Run()
+	if err := command.Run(); err != nil && !missingSecret(err) {
+		return fmt.Errorf("remove the sign-in from the system keychain: %w", err)
+	}
+	return nil
 }
 
 // missingSecret reports whether a store command failed because it holds no
 // such secret: the security tool exits 44, errSecItemNotFound, and
-// secret-tool exits 1.
+// secret-tool exits 1, which on macOS would be some other failure.
 func missingSecret(err error) bool {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) {
 		return false
 	}
-	return exit.ExitCode() == 44 || exit.ExitCode() == 1
+	if runtime.GOOS == "darwin" {
+		return exit.ExitCode() == 44
+	}
+	return exit.ExitCode() == 1
 }
 
 // cookieStore keeps the sign-in between runs.
@@ -168,11 +179,29 @@ type cookieStore interface {
 type keychainStore struct {
 	system credentialStore
 	file   *fileStore
+	// legacy and legacyFile held the OAuth tokens of earlier versions.
+	legacy     credentialStore
+	legacyFile string
+}
+
+// forgetLegacy removes what earlier versions kept, the OAuth tokens, which
+// nothing reads any more. It runs commands, so it is not for the main thread.
+func (s *keychainStore) forgetLegacy(ctx context.Context) {
+	if s.legacy != nil {
+		if err := s.legacy.remove(ctx); err != nil {
+			log.Printf("forgetting an earlier sign-in: %v", err)
+		}
+	}
+	if s.legacyFile != "" {
+		if err := os.Remove(s.legacyFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("forgetting an earlier sign-in: %v", err)
+		}
+	}
 }
 
 func (s *keychainStore) Load(ctx context.Context) (string, error) {
 	if s.system.available() {
-		if value, err := s.system.get(); err == nil {
+		if value, err := s.system.get(ctx); err == nil {
 			return value, nil
 		}
 	}
@@ -184,7 +213,7 @@ func (s *keychainStore) Load(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if s.system.available() {
-		if err := s.system.set(cookie); err == nil {
+		if err := s.system.set(ctx, cookie); err == nil {
 			_ = s.file.Delete(ctx)
 		}
 	}
@@ -193,7 +222,7 @@ func (s *keychainStore) Load(ctx context.Context) (string, error) {
 
 func (s *keychainStore) Save(ctx context.Context, cookie string) error {
 	if s.system.available() {
-		if err := s.system.set(cookie); err == nil {
+		if err := s.system.set(ctx, cookie); err == nil {
 			// The cookie does not belong in the file once the system
 			// store has it.
 			_ = s.file.Delete(ctx)
@@ -203,11 +232,14 @@ func (s *keychainStore) Save(ctx context.Context, cookie string) error {
 	return s.file.Save(ctx, cookie)
 }
 
+// Delete removes the sign-in from both places, and reports every one that
+// would not let go: a sign-out that leaves the session behind should say so.
 func (s *keychainStore) Delete(ctx context.Context) error {
+	var systemErr error
 	if s.system.available() {
-		s.system.remove()
+		systemErr = s.system.remove(ctx)
 	}
-	return s.file.Delete(ctx)
+	return errors.Join(systemErr, s.file.Delete(ctx))
 }
 
 // fileStore keeps the cookie in a file only its user can read.
@@ -237,7 +269,7 @@ func (s *fileStore) Save(_ context.Context, cookie string) error {
 		return err
 	}
 	// The cookie is a credential: keep it readable by this user only.
-	return os.WriteFile(s.path, []byte(cookie), 0o600)
+	return writeFileAtomic(s.path, []byte(cookie), 0o600)
 }
 
 func (s *fileStore) Delete(context.Context) error {

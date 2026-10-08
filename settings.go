@@ -139,9 +139,8 @@ func loadSettings(path string) settings {
 	return read
 }
 
-// save writes the settings so that a crash leaves either the old file or the
-// new one, never half of one.
-func (s *settings) save(path string) (err error) {
+// save writes the settings atomically: see writeFileAtomic.
+func (s *settings) save(path string) error {
 	if path == "" {
 		return nil
 	}
@@ -149,31 +148,10 @@ func (s *settings) save(path string) (err error) {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = os.Remove(file.Name())
-		}
-	}()
-	if _, err = file.Write(data); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err = file.Sync(); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err = file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), path)
+	return writeFileAtomic(path, data, 0o600)
 }
 
 // settingsWriter saves settings off the main thread, one write at a time and

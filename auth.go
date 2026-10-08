@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -41,17 +42,19 @@ func (a *app) signInWithGoogle() {
 	a.signIn = signInState{open: true}
 }
 
+// cookieNamePattern is where the value of a Cookie header starts, whether the
+// text is the header, or a cURL command with it as an argument.
+var cookieNamePattern = regexp.MustCompile(`(?i)cookie:`)
+
 // cookieHeader picks the cookie out of what the user pasted: the value of the
 // header alone, the header with its name, or a whole line copied as a cURL
 // command.
 func cookieHeader(text string) string {
 	text = strings.TrimSpace(text)
-	lower := strings.ToLower(text)
-	for _, marker := range []string{"-h 'cookie:", `-h "cookie:`, "cookie:"} {
-		if i := strings.Index(lower, marker); i >= 0 {
-			text = text[i+len(marker):]
-			break
-		}
+	// The name is matched on the text itself: lowercasing a copy can change
+	// its length, and the offsets would no longer fit.
+	if at := cookieNamePattern.FindStringIndex(text); at != nil {
+		text = text[at[1]:]
 	}
 	text = strings.TrimSpace(text)
 	if i := strings.IndexAny(text, "'\"\n"); i >= 0 {
@@ -109,7 +112,7 @@ func (a *app) finishSignIn(ctx context.Context, cookie string) {
 	var client *youtube.Client
 	var details *youtube.AccountDetails
 	if err == nil {
-		client = youtube.NewClient(youtube.Options{CookieAuth: auth})
+		client = a.newClient(auth)
 		details, err = client.GetAccountDetails(ctx)
 	}
 	if err == nil && details.Name == "" && details.ChannelID == "" {
@@ -127,6 +130,7 @@ func (a *app) finishSignIn(ctx context.Context, cookie string) {
 			a.signIn.err = err.Error()
 			return
 		}
+		a.accountGen++
 		a.authed, a.signedIn, a.account = client, true, *details
 		a.signIn = signInState{}
 		a.onSignedIn()
@@ -139,6 +143,7 @@ func (a *app) restoreAccount() {
 	if a.store == nil {
 		return
 	}
+	gen := a.accountGen
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -150,9 +155,12 @@ func (a *app) restoreAccount() {
 		if err != nil {
 			return
 		}
-		client := youtube.NewClient(youtube.Options{CookieAuth: auth})
+		client := a.newClient(auth)
 		details, err := client.GetAccountDetails(ctx)
 		a.update(func() {
+			if gen != a.accountGen {
+				return // the user signed in or out while the cookie was being read
+			}
 			a.authed, a.signedIn = client, true
 			if err == nil {
 				a.account = *details
@@ -164,6 +172,7 @@ func (a *app) restoreAccount() {
 
 // signOut forgets the account.
 func (a *app) signOut() {
+	a.accountGen++
 	a.authed, a.signedIn, a.account = nil, false, youtube.AccountDetails{}
 	a.onSignedIn()
 	if a.store == nil {
@@ -173,7 +182,11 @@ func (a *app) signOut() {
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = store.Delete(ctx)
+		if err := store.Delete(ctx); err != nil {
+			a.update(func() {
+				a.notice = "Signed out, but the saved session could not be removed: " + err.Error()
+			})
+		}
 	})
 }
 

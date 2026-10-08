@@ -38,12 +38,20 @@ type app struct {
 	// The YouTube clients: public browses without an account, authed with
 	// its cookie once the user signs in. The store keeps the sign-in across
 	// restarts.
-	public   *youtube.Client
-	authed   *youtube.Client
-	store    cookieStore
-	account  youtube.AccountDetails
-	signedIn bool
-	signIn   signInState
+	public *youtube.Client
+	authed *youtube.Client
+	// newClient makes the client that carries an account's cookie; tests
+	// replace it with one that needs no network.
+	newClient func(*youtube.CookieAuth) *youtube.Client
+	store     cookieStore
+	account   youtube.AccountDetails
+	signedIn  bool
+	signIn    signInState
+	// accountGen numbers the changes of account, so that the answer to a
+	// question asked before a sign-in or sign-out is not taken as its result.
+	accountGen int
+	// notice is a message for the next frame to show as a toast.
+	notice string
 
 	// What the user chose, and where it is kept; empty keeps nothing.
 	settings     settings
@@ -135,6 +143,9 @@ func newApp() *app {
 	}
 	a.volume = a.settings.Volume
 	a.run = func(work func()) { go work() }
+	a.newClient = func(auth *youtube.CookieAuth) *youtube.Client {
+		return youtube.NewClient(youtube.Options{CookieAuth: auth})
+	}
 	a.thumbs = newThumbCache(a.refresh)
 	a.player.SetVolume(a.volume / 100)
 	return a
@@ -159,6 +170,9 @@ func main() {
 			TitleBarStyle: mygo.TitleBarHidden,
 			Content:       ui.View(a.view),
 		})
+		// Background work reaches the window through a.win, so it starts only
+		// once the window is there.
+		a.restoreAccount()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
@@ -181,7 +195,11 @@ func (a *app) setup() {
 		return
 	}
 	a.store = store
-	a.restoreAccount()
+	a.run(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		store.forgetLegacy(ctx)
+	})
 }
 
 // saveSettings keeps the settings, off the main thread.

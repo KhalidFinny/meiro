@@ -107,7 +107,7 @@ func ytDlpCookie(ctx context.Context, spec string) (string, error) {
 	}
 	// The cookies are a credential: the directory goes as soon as they have
 	// been read.
-	defer os.RemoveAll(directory)
+	defer removeAll(directory)
 	file := filepath.Join(directory, "cookies.txt")
 	// yt-dlp needs a URL to get as far as loading the cookies, and saves them
 	// when it ends, whether or not it found anything to download.

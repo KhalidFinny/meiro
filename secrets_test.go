@@ -11,16 +11,17 @@ import (
 // fakeKeychain is a credential store kept in memory, so the tests never
 // write to the machine's own keychain.
 type fakeKeychain struct {
-	usable bool
-	holds  bool
-	value  string
-	getErr error
-	setErr error
+	usable    bool
+	holds     bool
+	value     string
+	getErr    error
+	setErr    error
+	removeErr error
 }
 
 func (f *fakeKeychain) available() bool { return f.usable }
 
-func (f *fakeKeychain) set(value string) error {
+func (f *fakeKeychain) set(_ context.Context, value string) error {
 	if f.setErr != nil {
 		return f.setErr
 	}
@@ -28,7 +29,7 @@ func (f *fakeKeychain) set(value string) error {
 	return nil
 }
 
-func (f *fakeKeychain) get() (string, error) {
+func (f *fakeKeychain) get(context.Context) (string, error) {
 	if f.getErr != nil {
 		return "", f.getErr
 	}
@@ -38,7 +39,13 @@ func (f *fakeKeychain) get() (string, error) {
 	return f.value, nil
 }
 
-func (f *fakeKeychain) remove() { f.holds, f.value = false, "" }
+func (f *fakeKeychain) remove(context.Context) error {
+	if f.removeErr != nil {
+		return f.removeErr
+	}
+	f.holds, f.value = false, ""
+	return nil
+}
 
 const testCookie = "SAPISID=secret; SID=other"
 
@@ -225,30 +232,33 @@ func TestLiveKeychain(t *testing.T) {
 	if !probe.available() {
 		t.Skip("this system has no credential store command")
 	}
-	probe.remove()
-	t.Cleanup(probe.remove)
+	ctx := context.Background()
+	_ = probe.remove(ctx)
+	t.Cleanup(func() { _ = probe.remove(ctx) })
 
-	if _, err := probe.get(); !errors.Is(err, errSecretNotFound) {
+	if _, err := probe.get(ctx); !errors.Is(err, errSecretNotFound) {
 		t.Errorf("get of a missing secret = %v", err)
 	}
-	if err := probe.set("hello keychain"); err != nil {
+	if err := probe.set(ctx, "hello keychain"); err != nil {
 		t.Fatal(err)
 	}
-	value, err := probe.get()
+	value, err := probe.get(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if value != "hello keychain" {
 		t.Errorf("get = %q", value)
 	}
-	if err := probe.set("replaced"); err != nil {
+	if err := probe.set(ctx, "replaced"); err != nil {
 		t.Fatal(err)
 	}
-	if value, _ := probe.get(); value != "replaced" {
+	if value, _ := probe.get(ctx); value != "replaced" {
 		t.Errorf("get after replacing = %q", value)
 	}
-	probe.remove()
-	if _, err := probe.get(); !errors.Is(err, errSecretNotFound) {
+	if err := probe.remove(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := probe.get(ctx); !errors.Is(err, errSecretNotFound) {
 		t.Errorf("get after remove = %v", err)
 	}
 }
