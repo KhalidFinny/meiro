@@ -1055,22 +1055,16 @@ func extractMusicItems(root any, keep bool) []MusicItem {
 			sort.Strings(keys)
 			for _, key := range keys {
 				child := node[key]
-				kind, ok := rendererKind(key)
-				if ok {
+				if key == "musicCardShelfRenderer" {
+					// A search's top result is a card, not a list entry.
 					if renderer, ok := child.(map[string]any); ok {
-						item := parseMusicItem(kind, renderer, keep)
-						// A playlist may hold a song twice; its entries differ by
-						// the ID the playlist gave each, which keeps both.
-						identity := strings.Join([]string{
-							item.VideoID, item.BrowseID, item.PlaylistID, item.Title,
-							nestedString(renderer["playlistItemData"], "playlistSetVideoId"),
-						}, "\x00")
-						if identity != "\x00\x00\x00\x00" {
-							if _, exists := seen[identity]; !exists {
-								seen[identity] = struct{}{}
-								items = append(items, item)
-							}
+						if item, ok := parseMusicCardShelf(renderer, keep); ok {
+							appendMusicItem(&items, seen, item, renderer)
 						}
+					}
+				} else if kind, ok := rendererKind(key); ok {
+					if renderer, ok := child.(map[string]any); ok {
+						appendMusicItem(&items, seen, parseMusicItem(kind, renderer, keep), renderer)
 					}
 				}
 				walk(child)
@@ -1079,6 +1073,99 @@ func extractMusicItems(root any, keep bool) []MusicItem {
 	}
 	walk(root)
 	return items
+}
+
+// appendMusicItem keeps a parsed item unless its renderer held nothing to
+// identify it by. A playlist may hold a song twice; its entries differ by
+// the ID the playlist gave each, which keeps both.
+func appendMusicItem(items *[]MusicItem, seen map[string]struct{}, item MusicItem, renderer map[string]any) {
+	identity := strings.Join([]string{
+		item.VideoID, item.BrowseID, item.PlaylistID, item.Title,
+		nestedString(renderer["playlistItemData"], "playlistSetVideoId"),
+	}, "\x00")
+	if identity == "\x00\x00\x00\x00" {
+		return
+	}
+	if _, exists := seen[identity]; exists {
+		return
+	}
+	seen[identity] = struct{}{}
+	*items = append(*items, item)
+}
+
+// parseMusicCardShelf reads a search's top result. It carries its media in
+// the card itself, outside any list: the title run navigates to the video,
+// the artist's browse endpoint sits in the subtitle runs, and the length
+// trails the subtitle.
+func parseMusicCardShelf(renderer map[string]any, keep bool) (MusicItem, bool) {
+	item := MusicItem{Kind: "video"}
+	item.Title = rendererText(renderer["title"])
+	item.Subtitle = rendererText(renderer["subtitle"])
+	if duration := trailingDuration(item.Subtitle); duration != "" {
+		item.Duration = duration
+		item.Subtitle = strings.TrimSuffix(item.Subtitle, " • "+duration)
+	}
+	item.VideoID = nestedString([]any{renderer["title"], renderer["onTap"], renderer["thumbnailOverlay"]}, "videoId")
+	if item.VideoID == "" {
+		item.VideoID = rendererVideoID(renderer)
+	}
+	item.BrowseID = cardArtistBrowseID(renderer)
+	item.Thumbnail = rendererThumbnail(renderer["thumbnail"])
+	if item.Thumbnail == "" {
+		item.Thumbnail = rendererThumbnail(renderer)
+	}
+	if item.VideoID != "" {
+		item.ID = item.VideoID
+	} else if item.BrowseID != "" {
+		item.ID = item.BrowseID
+	}
+	if keep {
+		item.Raw = marshalRenderer(renderer)
+	}
+	if item.VideoID == "" || item.Title == "" {
+		return MusicItem{}, false
+	}
+	return item, true
+}
+
+// cardArtistBrowseID reads the artist a card's subtitle names. navigationID
+// cannot: it would return the mix queue of the card's menu entries first.
+func cardArtistBrowseID(renderer map[string]any) string {
+	subtitle, ok := renderer["subtitle"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	runs, ok := subtitle["runs"].([]any)
+	if !ok {
+		return ""
+	}
+	for _, value := range runs {
+		run, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		endpoint, ok := run["navigationEndpoint"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if browse, ok := endpoint["browseEndpoint"].(map[string]any); ok {
+			if id, _ := browse["browseId"].(string); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+// trailingDuration reads a track length from the end of a card's subtitle,
+// where it trails the artist as "Video • Artist • 8.4M views • 2:05".
+func trailingDuration(subtitle string) string {
+	for _, part := range strings.Split(subtitle, " • ") {
+		if isDurationText(strings.TrimSpace(part)) {
+			return strings.TrimSpace(part)
+		}
+	}
+	return ""
 }
 
 func rendererKind(key string) (string, bool) {
@@ -1201,11 +1288,11 @@ func rendererColumnText(renderer map[string]any, columnName string, index int) s
 	return ""
 }
 
-// rendererVideoID finds a renderer's video ID where responses nest it,
-// as search rows do in their flex columns. It looks only where a track's ID
-// lives, never in the item's menu, whose entries carry other IDs.
+// rendererVideoID finds a renderer's video ID where a track's own taps
+// keep it: its data, its play overlay and its columns. The menu stays out:
+// its mix and shuffle entries carry queue IDs, not the track's.
 func rendererVideoID(renderer map[string]any) string {
-	for _, key := range []string{"playlistItemData", "navigationEndpoint", "overlay", "flexColumns"} {
+	for _, key := range []string{"playlistItemData", "overlay", "flexColumns", "thumbnailOverlay", "navigationEndpoint", "title", "onTap"} {
 		value, ok := renderer[key]
 		if !ok {
 			continue
@@ -1341,8 +1428,17 @@ func navigationID(value any) string {
 				walk(child)
 			}
 		case map[string]any:
+			// Queue taps name a watch endpoint, not a page: their playlist
+			// is the mix being offered, and the track itself carries the
+			// video ID. navigationID only names browsable pages.
+			if _, watching := node["watchEndpoint"]; watching {
+				return
+			}
 			for _, name := range []string{"browseId", "playlistId"} {
 				if value, ok := node[name].(string); ok && value != "" {
+					if name == "playlistId" && !isBrowsablePlaylist(value) {
+						continue
+					}
 					result = value
 					return
 				}
@@ -1359,6 +1455,13 @@ func navigationID(value any) string {
 	}
 	walk(value)
 	return result
+}
+
+// isBrowsablePlaylist reports whether an ID names a page the app can open.
+// Mix and radio queues ride along in taps and menus, but browsing one is
+// empty: only library, community and product playlists open.
+func isBrowsablePlaylist(id string) bool {
+	return strings.HasPrefix(id, "VL") || strings.HasPrefix(id, "PL")
 }
 
 func rendererThumbnail(value any) string {

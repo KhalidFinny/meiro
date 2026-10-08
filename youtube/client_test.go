@@ -331,6 +331,56 @@ func TestPlaylistAndUpNextAreReadOnlyBrowseCalls(t *testing.T) {
 	}
 }
 
+// TestSearchKeepsItsTopCardResult reads the card of a search's top result. The
+// media lives in the card itself: its title run navigates to the video, its
+// subtitle names the artist and trails the length. The mix queue of the
+// card's menu entries must not become the video's destination.
+func TestSearchKeepsItsTopCardResult(t *testing.T) {
+	client := NewClient(Options{})
+	card := `{"thumbnail":{"musicThumbnailRenderer":{"thumbnail":{"thumbnails":[{"url":"https://img.example/top-card"}]}}},"title":{"runs":[{"text":"Top video","navigationEndpoint":{"watchEndpoint":{"videoId":"top-video"}}}]},"subtitle":{"runs":[{"text":"Video"},{"text":" • "},{"text":"Top Artist","navigationEndpoint":{"browseEndpoint":{"browseId":"UCartist"}}},{"text":" • "},{"text":"8.4M views"},{"text":" • "},{"text":"2:05"}]},"onTap":{"watchEndpoint":{"videoId":"top-video"}},"menu":{"menuRenderer":{"items":[{"menuNavigationItemRenderer":{"navigationEndpoint":{"watchEndpoint":{"videoId":"top-video","playlistId":"RDAMVMtop-video"}}}}]}}}`
+	row := `{"playlistItemData":{"videoId":"row-video"},"flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Row video"}]}}},{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Video"},{"text":" • "},{"text":"Row Artist"}]}}}]}`
+
+	raw := `{"contents":{"tabbedSearchResultsRenderer":{"tabs":[{"tabRenderer":{"content":{"sectionListRenderer":{"contents":[{"musicCardShelfRenderer":` + card + `},{"itemSectionRenderer":{"contents":[{"musicResponsiveListItemRenderer":` + row + `}]}}]}}}}]}}}`
+	result := client.newSearchResult(json.RawMessage(raw))
+	if len(result.Items) != 2 {
+		t.Fatalf("search items = %#v", result.Items)
+	}
+	top := result.Items[0]
+	if top.VideoID != "top-video" || top.Title != "Top video" {
+		t.Errorf("top card = %#v, want the card's video", top)
+	}
+	if top.Subtitle != "Video • Top Artist • 8.4M views" || top.Duration != "2:05" {
+		t.Errorf("top card subtitle %q with length %q", top.Subtitle, top.Duration)
+	}
+	if top.BrowseID != "UCartist" {
+		t.Errorf("top card artist = %q, want UCartist", top.BrowseID)
+	}
+	if top.Thumbnail != "https://img.example/top-card" {
+		t.Errorf("top card thumbnail = %q", top.Thumbnail)
+	}
+}
+
+func TestUpNextIgnoresItsMixQueueID(t *testing.T) {
+	// A queue entry names both its track and the mix offered beside it. The
+	// queue ID must not become the track's destination: opening it browses
+	// empty.
+	client := NewClient(Options{})
+	result := client.newUpNextResult(json.RawMessage(`{"contents":{"playlistPanelRenderer":{"contents":[
+		{"playlistPanelVideoRenderer":{
+			"videoId":"queue-video",
+			"title":{"simpleText":"Queue video"},
+			"navigationEndpoint":{"watchEndpoint":{"videoId":"queue-video","playlistId":"RDAMVMqueue-video"}}
+		}}
+	]}}}`))
+	if len(result.Items) != 1 {
+		t.Fatalf("up-next items = %#v", result.Items)
+	}
+	item := result.Items[0]
+	if item.VideoID != "queue-video" || item.BrowseID != "" {
+		t.Errorf("queue entry = %#v, want only its video ID", item)
+	}
+}
+
 func TestUpNextKeepsPlaylistContextAndContinuesRadioQueue(t *testing.T) {
 	var nextRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

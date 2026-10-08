@@ -530,6 +530,8 @@ func TestTargetOfRoutesItemsToPages(t *testing.T) {
 		{"artist", youtube.MusicItem{BrowseID: "UCabc"}, pageArtist, "UCabc"},
 		{"playlist", youtube.MusicItem{BrowseID: "VLPLabc"}, pagePlaylist, "VLPLabc"},
 		{"library playlist", youtube.MusicItem{PlaylistID: "PLabc"}, pagePlaylist, "PLabc"},
+		{"video with a mix queue", youtube.MusicItem{VideoID: "video-1", BrowseID: "RDAMVMvideo-1", Kind: "video"}, pageTrack, "video-1"},
+		{"video naming its artist", youtube.MusicItem{VideoID: "video-1", BrowseID: "UCartist", Kind: "video"}, pageTrack, "video-1"},
 		{"library album", youtube.MusicItem{BrowseID: "FEmusic_library_privately_owned_release1"}, pageAlbum, "FEmusic_library_privately_owned_release1"},
 		{"nothing", youtube.MusicItem{Title: "empty"}, "", ""},
 	}

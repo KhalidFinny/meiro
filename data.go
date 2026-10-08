@@ -536,19 +536,26 @@ func (a *app) playCollection(item youtube.MusicItem) {
 	})
 }
 
-// targetOf says what an item opens. Album, artist and playlist IDs are
-// recognizable by their prefixes; anything else with a video ID is a song.
+// targetOf says what an item opens. A video ID always wins: rows name their
+// artist beside the track itself, and the artist must not capture the tap.
+// Album and playlist IDs route only items with no video; the artist only
+// items with neither video nor collection.
 func targetOf(item youtube.MusicItem) (kind, id string) {
 	browse, playlist := item.BrowseID, item.PlaylistID
 	if playlist == "" {
 		playlist = browse
 	}
+	isAlbum := strings.HasPrefix(browse, "MPR") || strings.Contains(browse, "privately_owned_release")
+	isPlaylist := strings.HasPrefix(playlist, "VL") || strings.HasPrefix(playlist, "PL")
+	isArtist := strings.HasPrefix(browse, "UC") || strings.Contains(browse, "privately_owned_artist")
 	switch {
-	case strings.HasPrefix(browse, "MPR"), strings.Contains(browse, "privately_owned_release"):
+	case item.VideoID != "" && !isAlbum && !isPlaylist:
+		return pageTrack, item.VideoID
+	case isAlbum:
 		return pageAlbum, browse
-	case strings.HasPrefix(playlist, "VL"), strings.HasPrefix(playlist, "PL"), strings.HasPrefix(playlist, "RD"):
+	case isPlaylist:
 		return pagePlaylist, playlist
-	case strings.HasPrefix(browse, "UC"), strings.Contains(browse, "privately_owned_artist"):
+	case isArtist:
 		return pageArtist, browse
 	case item.VideoID != "":
 		return pageTrack, item.VideoID
