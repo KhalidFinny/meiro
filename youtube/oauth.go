@@ -60,12 +60,14 @@ type OAuthConfig struct {
 	ClientSecret string
 	HTTPClient   *http.Client
 	BaseURL      string
+	TokenStore   TokenStore
 }
 
 // OAuth manages device authorization and refresh tokens.
 type OAuth struct {
 	httpClient *http.Client
 	baseURL    string
+	tokenStore TokenStore
 
 	mu          sync.Mutex
 	credentials OAuthClientCredentials
@@ -83,10 +85,40 @@ func NewOAuth(config OAuthConfig) *OAuth {
 	return &OAuth{
 		httpClient: config.HTTPClient,
 		baseURL:    strings.TrimRight(config.BaseURL, "/"),
+		tokenStore: config.TokenStore,
 		credentials: OAuthClientCredentials{
 			ClientID: config.ClientID, ClientSecret: config.ClientSecret,
 		},
 	}
+}
+
+// Restore loads credentials from the configured token store and refreshes
+// them if they are near expiry. The store must protect credentials at rest.
+func (o *OAuth) Restore(ctx context.Context) error {
+	if o.tokenStore == nil {
+		return errors.New("youtube: OAuth token store is not configured")
+	}
+	tokens, err := o.tokenStore.Load(ctx)
+	if err != nil {
+		return err
+	}
+	if err := o.SetTokens(tokens); err != nil {
+		return err
+	}
+	_, err = o.AccessToken(ctx)
+	return err
+}
+
+// SaveTokens writes the current credentials to the configured token store.
+func (o *OAuth) SaveTokens(ctx context.Context) error {
+	if o.tokenStore == nil {
+		return errors.New("youtube: OAuth token store is not configured")
+	}
+	tokens, ok := o.Tokens()
+	if !ok {
+		return errors.New("youtube: no OAuth tokens to save")
+	}
+	return o.tokenStore.Save(ctx, tokens)
 }
 
 // SetTokens replaces the current token set. Tokens can be persisted by the
@@ -237,6 +269,11 @@ func (o *OAuth) PollForTokens(ctx context.Context, code DeviceCode) (Tokens, err
 		}
 		client := credentials
 		tokens.Client = &client
+		if o.tokenStore != nil {
+			if err := o.tokenStore.Save(ctx, tokens); err != nil {
+				return Tokens{}, fmt.Errorf("youtube: save OAuth tokens: %w", err)
+			}
+		}
 		if err := o.SetTokens(tokens); err != nil {
 			return Tokens{}, err
 		}
@@ -297,6 +334,11 @@ func (o *OAuth) refreshLocked(ctx context.Context) error {
 	if response.RefreshToken != "" {
 		o.tokens.RefreshToken = response.RefreshToken
 	}
+	if o.tokenStore != nil {
+		if err := o.tokenStore.Save(ctx, *o.tokens); err != nil {
+			return fmt.Errorf("youtube: save refreshed OAuth tokens: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -323,6 +365,11 @@ func (o *OAuth) Revoke(ctx context.Context) error {
 		return responseError("revoke OAuth token", resp)
 	}
 	o.tokens = nil
+	if o.tokenStore != nil {
+		if err := o.tokenStore.Delete(ctx); err != nil {
+			return fmt.Errorf("youtube: delete revoked OAuth tokens: %w", err)
+		}
+	}
 	return nil
 }
 

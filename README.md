@@ -47,6 +47,30 @@ selects the best directly playable audio URL when one is available. The package
 does not include an audio decoder/player or JavaScript player-script
 deciphering yet.
 
+For sign-in across app restarts, provide an implementation of `youtube.TokenStore`
+that uses the operating system keychain. `OAuth.Restore` loads saved tokens, and
+device login and token refresh save them through that store. The package does
+not store OAuth secrets in a plain-text file.
+
+Cookie auth can list all channels available to the account. OAuth returns only
+the active channel. Cookies are sensitive credentials; do not log them or put
+them in source control.
+
+```go
+cookieAuth, err := youtube.NewCookieAuth(browserCookieHeader, youtube.CookieOptions{
+	AccountIndex: 0,
+})
+if err != nil {
+	return err
+}
+music := youtube.NewClient(youtube.Options{CookieAuth: cookieAuth})
+accounts, err := music.GetAccounts(ctx)
+if err != nil {
+	return err
+}
+fmt.Printf("Found %d accounts\n", len(accounts.Items))
+```
+
 ## Run
 
 ```sh

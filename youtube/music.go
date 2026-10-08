@@ -63,6 +63,12 @@ type AccountDetails struct {
 	Raw json.RawMessage `json:"raw"`
 }
 
+// AccountList contains the raw response for all channels available to a
+// cookie-authenticated account.
+type AccountList struct {
+	Raw json.RawMessage `json:"raw"`
+}
+
 // TrackInfo contains player metadata and formats for one music track. URLs
 // that YouTube returns directly can be played by an audio player; encrypted
 // signatureCipher formats are exposed as-is and need player-script deciphering.
@@ -183,8 +189,8 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*BrowseRes
 // GetAccountDetails returns the active signed-in account. It requires a
 // configured OAuth session; YouTube's OAuth flow reports the active channel.
 func (c *Client) GetAccountDetails(ctx context.Context) (*AccountDetails, error) {
-	if c.oauth == nil {
-		return nil, errors.New("youtube: GetAccountDetails requires OAuth")
+	if c.oauth == nil && c.cookieAuth == nil {
+		return nil, errors.New("youtube: GetAccountDetails requires OAuth or cookie authentication")
 	}
 	raw, err := c.executeForClient(ctx, "account/accounts_list", map[string]any{}, "TV")
 	if err != nil {
@@ -193,10 +199,26 @@ func (c *Client) GetAccountDetails(ctx context.Context) (*AccountDetails, error)
 	return &AccountDetails{Raw: raw}, nil
 }
 
+// GetAccounts lists all channels available to a cookie-authenticated account.
+// YouTube's OAuth flow returns only the active channel.
+func (c *Client) GetAccounts(ctx context.Context) (*AccountList, error) {
+	if c.cookieAuth == nil {
+		return nil, errors.New("youtube: GetAccounts requires cookie authentication")
+	}
+	raw, err := c.executeForClient(ctx, "account/accounts_list", map[string]any{
+		"requestType":      "ACCOUNTS_LIST_REQUEST_TYPE_CHANNEL_SWITCHER",
+		"callCircumstance": "SWITCHING_USERS_FULL",
+	}, "WEB")
+	if err != nil {
+		return nil, err
+	}
+	return &AccountList{Raw: raw}, nil
+}
+
 // GetAccountSettings returns the account overview page for the signed-in user.
 func (c *Client) GetAccountSettings(ctx context.Context) (*BrowseResult, error) {
-	if c.oauth == nil {
-		return nil, errors.New("youtube: GetAccountSettings requires OAuth")
+	if c.oauth == nil && c.cookieAuth == nil {
+		return nil, errors.New("youtube: GetAccountSettings requires OAuth or cookie authentication")
 	}
 	raw, err := c.executeForClient(ctx, "browse", map[string]any{"browseId": "SPaccount_overview"}, "WEB")
 	if err != nil {

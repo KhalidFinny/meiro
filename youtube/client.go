@@ -54,6 +54,7 @@ type Options struct {
 	Language         string
 	Country          string
 	OAuth            *OAuth
+	CookieAuth       *CookieAuth
 }
 
 // Client issues read-only YouTube Music requests.
@@ -69,6 +70,7 @@ type Client struct {
 	language         string
 	country          string
 	oauth            *OAuth
+	cookieAuth       *CookieAuth
 
 	configMu sync.Mutex
 }
@@ -113,6 +115,7 @@ func NewClient(options Options) *Client {
 		language:         options.Language,
 		country:          options.Country,
 		oauth:            options.OAuth,
+		cookieAuth:       options.CookieAuth,
 	}
 }
 
@@ -124,6 +127,11 @@ type clientContext struct {
 		ClientVersion string `json:"clientVersion"`
 		VisitorData   string `json:"visitorData,omitempty"`
 	} `json:"client"`
+	User *clientUserContext `json:"user,omitempty"`
+}
+
+type clientUserContext struct {
+	OnBehalfOfUser string `json:"onBehalfOfUser,omitempty"`
 }
 
 func (c *Client) context() clientContext {
@@ -194,6 +202,9 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 	requestContext := c.context()
 	requestContext.Client.ClientName = clientName
 	requestContext.Client.ClientVersion = clientVersion
+	if c.cookieAuth != nil {
+		requestContext.User = &clientUserContext{OnBehalfOfUser: c.cookieAuth.onBehalfOfUser}
+	}
 	payload["context"] = requestContext
 	delete(payload, "client")
 	if client == "YTMUSIC" {
@@ -228,7 +239,14 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 	if client == "TV" {
 		req.Header.Set("User-Agent", "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version")
 	}
-	if c.oauth != nil {
+	if c.cookieAuth != nil {
+		req.Header.Set("Cookie", c.cookieAuth.cookie)
+		req.Header.Set("Authorization", c.cookieAuth.authorization(time.Now()))
+		req.Header.Set("X-Goog-Authuser", fmt.Sprint(c.cookieAuth.accountIndex))
+		if c.cookieAuth.onBehalfOfUser != "" {
+			req.Header.Set("X-Goog-PageId", c.cookieAuth.onBehalfOfUser)
+		}
+	} else if c.oauth != nil {
 		token, err := c.oauth.AccessToken(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("youtube: get OAuth access token: %w", err)

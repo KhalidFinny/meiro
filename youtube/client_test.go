@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -202,6 +203,59 @@ func TestGetAccountDetailsUsesOAuth(t *testing.T) {
 	}
 }
 
+func TestCookieAuthenticationAndAllAccounts(t *testing.T) {
+	cookieAuth, err := NewCookieAuth("SAPISID=secret; SID=other", CookieOptions{AccountIndex: 2, OnBehalfOfUser: "UC-channel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/youtubei/v1/account/accounts_list" {
+			t.Errorf("request path = %q", r.URL.Path)
+		}
+		if r.Header.Get("Cookie") != "SAPISID=secret; SID=other" {
+			t.Errorf("Cookie header = %q", r.Header.Get("Cookie"))
+		}
+		if r.Header.Get("X-Goog-Authuser") != "2" || r.Header.Get("X-Goog-PageId") != "UC-channel" {
+			t.Errorf("account selection headers = %#v", r.Header)
+		}
+		authorization := strings.TrimPrefix(r.Header.Get("Authorization"), "SAPISIDHASH ")
+		timestampText, digest, ok := strings.Cut(authorization, "_")
+		if !ok {
+			t.Errorf("malformed cookie authorization %q", r.Header.Get("Authorization"))
+		} else if timestamp, err := strconv.ParseInt(timestampText, 10, 64); err != nil {
+			t.Errorf("authorization timestamp %q is invalid: %v", timestampText, err)
+		} else if got := r.Header.Get("Authorization"); got != cookieAuth.authorization(time.Unix(timestamp, 0)) {
+			t.Errorf("authorization digest does not match SAPISID")
+		} else if digest == "" {
+			t.Error("authorization digest is empty")
+		}
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request["requestType"] != "ACCOUNTS_LIST_REQUEST_TYPE_CHANNEL_SWITCHER" || request["callCircumstance"] != "SWITCHING_USERS_FULL" {
+			t.Errorf("account-list request = %#v", request)
+		}
+		user := request["context"].(map[string]any)["user"].(map[string]any)
+		if user["onBehalfOfUser"] != "UC-channel" {
+			t.Errorf("user context = %#v", user)
+		}
+		_, _ = w.Write([]byte(`{"accounts":[{"channelId":"UC-channel"}]}`))
+	}))
+	defer server.Close()
+	client := NewClient(Options{BaseURL: server.URL, APIKey: "key", CookieAuth: cookieAuth})
+	accounts, err := client.GetAccounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(accounts.Raw), "UC-channel") {
+		t.Errorf("accounts response = %s", accounts.Raw)
+	}
+	if _, err := NewCookieAuth("SID=not-enough", CookieOptions{}); err == nil {
+		t.Fatal("NewCookieAuth accepted cookies without SAPISID")
+	}
+}
+
 func TestOAuthDiscoversClientCredentialsFromTV(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -236,6 +290,31 @@ func TestOAuthDiscoversClientCredentialsFromTV(t *testing.T) {
 	oauth.mu.Unlock()
 	if credentials.ClientID != "discovered-id" || credentials.ClientSecret != "discovered-secret" {
 		t.Errorf("discovered credentials = %#v", credentials)
+	}
+}
+
+func TestOAuthRestoreRefreshesAndPersistsTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/o/oauth2/token" {
+			t.Errorf("request path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"access_token":"refreshed","refresh_token":"rotated","expires_in":3600}`))
+	}))
+	defer server.Close()
+	store := &memoryTokenStore{tokens: Tokens{
+		AccessToken: "expired", RefreshToken: "refresh", ExpiryDate: time.Now().Add(-time.Minute),
+		Client: &OAuthClientCredentials{ClientID: "client-id", ClientSecret: "client-secret"},
+	}, exists: true}
+	oauth := NewOAuth(OAuthConfig{HTTPClient: server.Client(), BaseURL: server.URL, TokenStore: store})
+	if err := oauth.Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := oauth.Tokens()
+	if !ok || got.AccessToken != "refreshed" || got.RefreshToken != "rotated" {
+		t.Errorf("restored tokens = %#v, found %v", got, ok)
+	}
+	if !store.exists || store.tokens.AccessToken != "refreshed" || store.tokens.RefreshToken != "rotated" {
+		t.Errorf("persisted tokens = %#v", store.tokens)
 	}
 }
 
@@ -300,6 +379,30 @@ func TestOAuthDeviceFlowAndAutomaticRefresh(t *testing.T) {
 	if accessToken != "refreshed" {
 		t.Errorf("refreshed access token = %q", accessToken)
 	}
+}
+
+type memoryTokenStore struct {
+	tokens Tokens
+	exists bool
+}
+
+func (store *memoryTokenStore) Load(context.Context) (Tokens, error) {
+	if !store.exists {
+		return Tokens{}, ErrNoStoredTokens
+	}
+	return store.tokens, nil
+}
+
+func (store *memoryTokenStore) Save(_ context.Context, tokens Tokens) error {
+	store.tokens = tokens
+	store.exists = true
+	return nil
+}
+
+func (store *memoryTokenStore) Delete(context.Context) error {
+	store.tokens = Tokens{}
+	store.exists = false
+	return nil
 }
 
 func TestSetTokensRejectsIncompleteCredentials(t *testing.T) {
