@@ -33,12 +33,16 @@ type settings struct {
 	Volume float64 `json:"volume"`
 	// AutoPlay adds YouTube Music's generated queue after the selected tracks.
 	AutoPlay bool `json:"autoPlay"`
+	// CacheSongs is how many recently played audio files to keep on disk.
+	CacheSongs int `json:"cacheSongs"`
+	// CacheDirectory is the parent folder for the app-managed audio cache.
+	CacheDirectory string `json:"cacheDirectory,omitempty"`
 	// Recent holds the searches submitted, newest first.
 	Recent []string `json:"recent,omitempty"`
 }
 
 func defaultSettings() settings {
-	return settings{Seed: "#6750a4", Mode: "system", Volume: 70, AutoPlay: true}
+	return settings{Seed: "#6750a4", Mode: "system", Volume: 70, AutoPlay: true, CacheSongs: defaultAudioCacheLimit}
 }
 
 // clone returns a copy that shares no memory with s, for work that outlives
@@ -134,6 +138,7 @@ func loadSettings(path string) settings {
 	if read.Volume < 0 || read.Volume > 100 {
 		read.Volume = s.Volume
 	}
+	read.CacheSongs = validAudioCacheLimit(read.CacheSongs)
 	if _, ok := parseSeed(read.Seed); !ok {
 		read.Seed = s.Seed
 	}

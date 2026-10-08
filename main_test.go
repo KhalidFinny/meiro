@@ -363,6 +363,8 @@ func TestSettingsPersist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "settings.json")
 	s := defaultSettings()
 	s.Seed, s.Mode, s.Style, s.Dynamic, s.AutoPlay = "#00897b", "dark", int(m3.Expressive), true, false
+	s.CacheSongs = 20
+	s.CacheDirectory = filepath.Join(t.TempDir(), "audio files")
 	s.remember("one")
 	s.remember("two")
 	s.remember("One")
@@ -370,7 +372,7 @@ func TestSettingsPersist(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := loadSettings(path)
-	if got.Seed != s.Seed || got.Mode != "dark" || got.Style != int(m3.Expressive) || !got.Dynamic || got.AutoPlay {
+	if got.Seed != s.Seed || got.Mode != "dark" || got.Style != int(m3.Expressive) || !got.Dynamic || got.AutoPlay || got.CacheSongs != s.CacheSongs || got.CacheDirectory != s.CacheDirectory {
 		t.Errorf("settings came back as %+v", got)
 	}
 	if len(got.Recent) != 2 || got.Recent[0] != "One" {
@@ -388,6 +390,82 @@ func TestSettingsPersist(t *testing.T) {
 	}
 	if bad := loadSettings(path); bad.Seed != defaultSettings().Seed {
 		t.Errorf("a broken file gave %+v", bad)
+	}
+}
+
+func TestSettingsCacheLimitDefaultsAndAllowsAnyNonNegativeValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	for _, test := range []struct {
+		name string
+		json string
+		want int
+	}{
+		{name: "old settings", json: `{"volume":70}`, want: defaultAudioCacheLimit},
+		{name: "custom count", json: `{"cacheSongs":37}`, want: 37},
+		{name: "disabled", json: `{"cacheSongs":0}`, want: 0},
+		{name: "negative count", json: `{"cacheSongs":-1}`, want: defaultAudioCacheLimit},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(test.json), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := loadSettings(path).CacheSongs; got != test.want {
+				t.Errorf("cache limit = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSettingsChoosePlaybackCacheLimit(t *testing.T) {
+	a := newTestApp()
+	a.router.Push("/settings")
+	a.cacheSongsText = ""
+	a.cacheDirectoryText = "/music/cache"
+	tt := ui.NewTester(a.view, 1000, 1800)
+	if !tt.HasText("Playback cache") || !tt.HasText("Keep recent songs") || !tt.HasText("Songs to cache") || !tt.HasText("Cache folder") || !tt.HasText("Choose cache folder") || !tt.HasText("/music/cache") || !tt.HasText("MP3") {
+		t.Fatalf("the cache setting is missing: %q", tt.Texts())
+	}
+	if err := tt.Click("Songs to cache"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("37")
+	tt.Key(0, ui.KeyEnter)
+	if a.settings.CacheSongs != 37 {
+		t.Fatalf("entering 37 set the cache size to %d (text %q, error %q)", a.settings.CacheSongs, a.cacheSongsText, a.cacheLimitError)
+	}
+	a.cacheSongsText = "0"
+	tt.Frame()
+	if err := tt.Click("Songs to cache"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(0, ui.KeyEnter)
+	if a.settings.CacheSongs != 0 {
+		t.Errorf("setting the limit to 0 set the cache size to %d", a.settings.CacheSongs)
+	}
+}
+
+func TestReplacingAudioCacheClosesCurrentAndRetiredCachesAtShutdown(t *testing.T) {
+	a := newTestApp()
+	first, err := newAudioCache(t.TempDir(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newAudioCache(t.TempDir(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.replaceAudioCache(first)
+	if got := a.replaceAudioCache(second); got != first {
+		t.Fatal("replacing the cache did not return the previous manager")
+	}
+	a.closeAudioCaches()
+	for name, cache := range map[string]*audioCache{"retired": first, "current": second} {
+		cache.mu.Lock()
+		closed := cache.closed
+		cache.mu.Unlock()
+		if !closed {
+			t.Errorf("%s audio cache was left open", name)
+		}
 	}
 }
 

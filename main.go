@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,10 +29,13 @@ import (
 
 // app is the state the window shows.
 type app struct {
-	win    *mygo.Window
-	router *ui.Router
-	player *player.Player
-	thumbs *thumbCache
+	win                *mygo.Window
+	router             *ui.Router
+	player             *player.Player
+	thumbs             *thumbCache
+	audioCache         *audioCache
+	retiredAudioCaches []*audioCache
+	audioCacheMu       sync.RWMutex
 
 	// run runs work off the main thread. Tests replace it with a runner
 	// that runs the work inline, so a frame sees its result at once.
@@ -65,9 +69,13 @@ type app struct {
 	notice string
 
 	// What the user chose, and where it is kept; empty keeps nothing.
-	settings     settings
-	settingsPath string
-	saver        settingsWriter
+	settings            settings
+	settingsPath        string
+	saver               settingsWriter
+	cacheSongsText      string
+	cacheLimitError     string
+	cacheDirectoryText  string
+	cacheDirectoryError string
 	// The theme being shown. A change of colours glides from one scheme to
 	// the next rather than cutting.
 	shown     *m3.Theme
@@ -179,6 +187,7 @@ func newApp() *app {
 		router:              ui.NewRouter("/home"),
 		player:              player.New(playerOptions...),
 		settings:            defaultSettings(),
+		cacheSongsText:      strconv.Itoa(defaultAudioCacheLimit),
 		search:              searchState{},
 		details:             make(map[string]detail),
 		carousels:           make(map[string]*m3.CarouselState),
@@ -235,7 +244,9 @@ func main() {
 		// once the window is there.
 		a.restoreAccount()
 	})
-	if err := mygo.App.Run(); err != nil {
+	err := mygo.App.Run()
+	a.closeAudioCaches()
+	if err != nil {
 		log.Fatal(err)
 	}
 }
@@ -246,8 +257,31 @@ func (a *app) setup() {
 	if directory, err := mygo.App.Path(mygo.PathUserData); err == nil {
 		a.settingsPath = filepath.Join(directory, "settings.json")
 		a.settings = loadSettings(a.settingsPath)
+		a.cacheSongsText = strconv.Itoa(a.settings.CacheSongs)
 		a.volume = a.settings.Volume
 		a.player.SetVolume(a.volume / 100)
+	}
+	defaultRoot, rootErr := mygo.App.Path(mygo.PathCache)
+	if rootErr != nil {
+		log.Printf("finding default audio cache directory: %v", rootErr)
+	} else {
+		cacheRoot := a.settings.CacheDirectory
+		if cacheRoot == "" {
+			cacheRoot = defaultRoot
+		}
+		a.cacheDirectoryText = cacheRoot
+		cache, canonicalRoot, cacheErr := newAudioCacheAtRoot(cacheRoot, a.settings.CacheSongs)
+		if cacheErr != nil && cacheRoot != defaultRoot {
+			log.Printf("setting up audio cache at %q: %v; using the default location", cacheRoot, cacheErr)
+			a.cacheDirectoryError = "The saved folder is unavailable. Using the default cache location."
+			cache, canonicalRoot, cacheErr = newAudioCacheAtRoot(defaultRoot, a.settings.CacheSongs)
+		}
+		if cacheErr != nil {
+			log.Printf("setting up audio cache: %v", cacheErr)
+		} else {
+			a.cacheDirectoryText = canonicalRoot
+			a.replaceAudioCache(cache)
+		}
 	}
 	a.public = youtube.NewClient(youtube.Options{})
 	store, err := newCookieStore()
@@ -260,6 +294,97 @@ func (a *app) setup() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		store.forgetLegacy(ctx)
+	})
+}
+
+func (a *app) currentAudioCache() *audioCache {
+	a.audioCacheMu.RLock()
+	defer a.audioCacheMu.RUnlock()
+	return a.audioCache
+}
+
+func (a *app) replaceAudioCache(cache *audioCache) *audioCache {
+	a.audioCacheMu.Lock()
+	defer a.audioCacheMu.Unlock()
+	previous := a.audioCache
+	if previous != nil && previous != cache {
+		a.retiredAudioCaches = append(a.retiredAudioCaches, previous)
+	}
+	a.audioCache = cache
+	return previous
+}
+
+func (a *app) closeAudioCaches() {
+	a.audioCacheMu.Lock()
+	caches := append(a.retiredAudioCaches, a.audioCache)
+	a.retiredAudioCaches = nil
+	a.audioCache = nil
+	a.audioCacheMu.Unlock()
+	for _, cache := range caches {
+		cache.close()
+	}
+}
+
+// chooseAudioCacheDirectory opens the native folder picker, then switches
+// future playback to an app-owned audio folder inside the chosen directory.
+func (a *app) chooseAudioCacheDirectory() {
+	defaultPath := a.cacheDirectoryText
+	currentRoot := a.cacheDirectoryText
+	defaultRoot, _ := mygo.App.Path(mygo.PathCache)
+	if defaultPath == "" {
+		defaultPath = defaultRoot
+	}
+	limit, parent := a.settings.CacheSongs, a.win
+	a.run(func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent: parent, Title: "Choose audio cache folder", DefaultPath: defaultPath,
+			Directory: true, CreateDirectories: true,
+		})
+		if err != nil {
+			a.update(func() { a.cacheDirectoryError = "Could not open the folder picker: " + err.Error() })
+			return
+		}
+		if len(paths) == 0 {
+			return
+		}
+		root, err := filepath.Abs(paths[0])
+		if err != nil {
+			a.update(func() { a.cacheDirectoryError = "Could not use that folder: " + err.Error() })
+			return
+		}
+		if filepath.Clean(root) == filepath.Clean(currentRoot) {
+			a.update(func() {
+				if filepath.Clean(root) == filepath.Clean(defaultRoot) {
+					a.settings.CacheDirectory = ""
+				} else {
+					a.settings.CacheDirectory = root
+				}
+				a.cacheDirectoryText = root
+				a.cacheDirectoryError = ""
+				a.saveSettings()
+			})
+			return
+		}
+		cache, root, err := newAudioCacheAtRoot(root, limit)
+		if err != nil {
+			a.update(func() { a.cacheDirectoryError = "Could not use that folder: " + err.Error() })
+			return
+		}
+		a.update(func() {
+			cache.setLimit(a.settings.CacheSongs)
+			previous := a.replaceAudioCache(cache)
+			if filepath.Clean(root) == filepath.Clean(defaultRoot) {
+				a.settings.CacheDirectory = ""
+			} else {
+				a.settings.CacheDirectory = root
+			}
+			a.cacheDirectoryText = root
+			a.cacheDirectoryError = ""
+			a.saveSettings()
+			if previous != nil {
+				a.run(previous.close)
+			}
+		})
 	})
 }
 

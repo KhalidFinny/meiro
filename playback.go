@@ -222,9 +222,16 @@ func (a *app) stream(item youtube.MusicItem) {
 	a.resolving = true
 	client := a.client()
 	a.run(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		defer cancel()
-		streamURL, total, err := resolveStream(ctx, client, item)
+		streamURL, total := "", parseDuration(item.Duration)
+		var err error
+		cached, fromCache := a.currentAudioCache().get(item.VideoID)
+		if fromCache {
+			streamURL = cached
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			streamURL, total, err = resolveStream(ctx, client, item)
+			cancel()
+		}
 		defer reclaimMemory()
 		a.update(func() {
 			if gen != a.streamGen {
@@ -240,9 +247,22 @@ func (a *app) stream(item youtube.MusicItem) {
 			}
 			if err := a.player.Play(streamURL); err != nil {
 				a.playErr = err.Error()
+			} else if !fromCache {
+				cache, videoID := a.currentAudioCache(), item.VideoID
+				a.run(func() { cache.enqueue(videoID) })
 			}
 		})
 	})
+}
+
+// setAudioCacheLimit changes the number of recently played audio files kept
+// locally, evicting old files at once when the limit goes down.
+func (a *app) setAudioCacheLimit(limit int) {
+	a.settings.CacheSongs = validAudioCacheLimit(limit)
+	a.cacheSongsText = strconv.Itoa(a.settings.CacheSongs)
+	cache, count := a.currentAudioCache(), a.settings.CacheSongs
+	a.run(func() { cache.setLimit(count) })
+	a.saveSettings()
 }
 
 // resolveStream finds a URL ffmpeg can read. It asks YouTube through the

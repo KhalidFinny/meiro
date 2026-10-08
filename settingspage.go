@@ -1,6 +1,9 @@
 package main
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/egoist/mygo/ui"
 
 	"github.com/elianiva/meiro/m3"
@@ -28,6 +31,7 @@ func (a *app) settingsPage(c *ui.Context) {
 	ui.Scroll(c).Grow(1).Padding(0, pageGutter, a.clearance()).Children(func() {
 		ui.Column(c).MaxWidth(780).Gap(16).Children(func() {
 			a.appearanceCard(c)
+			a.playbackCacheCard(c)
 			a.accountCard(c)
 			a.aboutCard(c)
 		})
@@ -113,6 +117,48 @@ func (a *app) appearanceCard(c *ui.Context) {
 			if m3.Switch(c, &on, "Colour from artwork").Changed() {
 				a.settings.Dynamic = on
 				a.saveSettings()
+			}
+		})
+	})
+}
+
+// playbackCacheCard controls the number of recently played songs kept on
+// disk for replay without another network stream.
+func (a *app) playbackCacheCard(c *ui.Context) {
+	sc := m3.Active().Scheme
+	a.settingsCard(c, "Playback cache", m3.IconMusicNote, func() {
+		ui.Column(c).Gap(12).Children(func() {
+			settingLabel(c, "Keep recent songs", "Enter any non-negative whole number and press Enter to apply. Set 0 to turn the cache off. Older songs are removed first; cached files are MP3s stored in a private Meiro cache folder.")
+			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+				input := ui.TextInputBase(c.Key("audio-cache-limit"), &a.cacheSongsText).
+					Width(128).Height(48).Shrink(0).Padding(12).Radius(m3.Medium).Background(sc.SurfaceContainerHigh).
+					TextColor(sc.OnSurface).FontSize(16).Label("Songs to cache").Placeholder("10")
+				m3.Text(c, m3.BodyMedium, "songs").Width(48).Shrink(0).TextColor(sc.OnSurfaceVariant)
+				if input.Submitted() {
+					if limit, err := strconv.Atoi(strings.TrimSpace(a.cacheSongsText)); err == nil && limit >= 0 {
+						a.setAudioCacheLimit(limit)
+						a.cacheLimitError = ""
+					} else {
+						a.cacheLimitError = "Enter a whole number of 0 or more."
+					}
+				}
+			})
+			if a.cacheLimitError != "" {
+				m3.Text(c, m3.BodyMedium, a.cacheLimitError).TextColor(sc.Error)
+			}
+			settingLabel(c, "Cache folder", "Meiro creates a private ‘Meiro Audio Cache’ folder inside this location. Changing folders leaves the old cache in place.")
+			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+				location := a.cacheDirectoryText
+				if location == "" {
+					location = "Default app cache folder"
+				}
+				m3.Text(c, m3.BodyMedium, location).TextColor(sc.OnSurfaceVariant).MinWidth(0).Grow(1).SingleLine()
+				if m3.IconButton(c, m3.IconButtonSpec{Icon: m3.IconFolder, Label: "Choose cache folder", Kind: m3.OutlinedIcon, Size: m3.Small40, Key: "audio-cache-folder"}).Clicked() {
+					a.chooseAudioCacheDirectory()
+				}
+			})
+			if a.cacheDirectoryError != "" {
+				m3.Text(c, m3.BodyMedium, a.cacheDirectoryError).TextColor(sc.Error)
 			}
 		})
 	})
