@@ -340,7 +340,7 @@ func TestUpNextKeepsPlaylistContextAndContinuesRadioQueue(t *testing.T) {
 			if request["continuation"] != nil {
 				t.Errorf("initial up-next request unexpectedly has continuation: %#v", request)
 			}
-			_, _ = w.Write([]byte(`{"continuationContents":{"playlistPanelContinuation":{"contents":[{"playlistPanelVideoRenderer":{"videoId":"track-2","title":{"simpleText":"Next song"}}}],"continuations":[{"nextRadioContinuationData":{"continuation":"RADIO_MORE"}}]}}}`))
+			_, _ = w.Write([]byte(`{"continuationContents":{"playlistPanelContinuation":{"contents":[{"playlistPanelVideoRenderer":{"videoId":"track-2","title":{"simpleText":"Next song"}}}],"continuations":[{"nextContinuationData":{"continuation":"STANDARD_MORE"},"nextRadioContinuationData":{"continuation":"RADIO_MORE"}}]}}}`))
 		case 2:
 			if request["videoId"] != "track-1" || request["playlistId"] != "PL123" || request["playlistIndex"] != float64(2) || request["continuation"] != "RADIO_MORE" {
 				t.Errorf("continuation request = %#v", request)

@@ -55,12 +55,13 @@ type SearchResult struct {
 // BrowseResult represents a Music browse page such as an artist, album,
 // playlist, home feed, explore page, library, or account settings.
 type BrowseResult struct {
-	Items             []MusicItem       `json:"items"`
-	Sections          []MusicSection    `json:"sections,omitempty"`
-	ContinuationToken string            `json:"continuationToken,omitempty"`
-	QueuePlaylistID   string            `json:"queuePlaylistId,omitempty"`
-	Pages             []json.RawMessage `json:"pages,omitempty"`
-	Raw               json.RawMessage   `json:"raw"`
+	Items             []MusicItem    `json:"items"`
+	Sections          []MusicSection `json:"sections,omitempty"`
+	ContinuationToken string         `json:"continuationToken,omitempty"`
+	// QueuePlaylistID is the playlist panel's ID, used to continue radio queues.
+	QueuePlaylistID string            `json:"queuePlaylistId,omitempty"`
+	Pages           []json.RawMessage `json:"pages,omitempty"`
+	Raw             json.RawMessage   `json:"raw"`
 }
 
 // MusicSection is a shelf or grid in a browse response. ContinuationToken can
@@ -547,6 +548,7 @@ func (c *Client) GetUpNextWithOptions(ctx context.Context, options UpNextOptions
 func (c *Client) newUpNextResult(raw json.RawMessage) *BrowseResult {
 	result := c.newBrowseResult(raw)
 	result.QueuePlaylistID = upNextPlaylistID(raw)
+	result.ContinuationToken = upNextContinuationToken(raw)
 	return result
 }
 
@@ -575,6 +577,57 @@ func upNextPlaylistID(raw json.RawMessage) string {
 			for _, key := range sortedKeys(node) {
 				if id := walk(node[key]); id != "" {
 					return id
+				}
+			}
+		}
+		return ""
+	}
+	return walk(root)
+}
+
+func upNextContinuationToken(raw json.RawMessage) string {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return ""
+	}
+	var tokenFromPanel func(map[string]any) string
+	tokenFromPanel = func(panel map[string]any) string {
+		if token, ok := panel["continuation"].(string); ok && token != "" {
+			return token
+		}
+		continuations, _ := panel["continuations"].([]any)
+		for _, value := range continuations {
+			continuation, _ := value.(map[string]any)
+			for _, key := range []string{"nextRadioContinuationData", "nextContinuationData"} {
+				if data, ok := continuation[key].(map[string]any); ok {
+					if token, ok := data["continuation"].(string); ok && token != "" {
+						return token
+					}
+				}
+			}
+		}
+		return ""
+	}
+	var walk func(any) string
+	walk = func(value any) string {
+		switch node := value.(type) {
+		case []any:
+			for _, child := range node {
+				if token := walk(child); token != "" {
+					return token
+				}
+			}
+		case map[string]any:
+			for _, key := range []string{"playlistPanelRenderer", "playlistPanelContinuation"} {
+				if panel, ok := node[key].(map[string]any); ok {
+					if token := tokenFromPanel(panel); token != "" {
+						return token
+					}
+				}
+			}
+			for _, key := range sortedKeys(node) {
+				if token := walk(node[key]); token != "" {
+					return token
 				}
 			}
 		}
