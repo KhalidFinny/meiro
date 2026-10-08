@@ -3,9 +3,16 @@ package m3
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
+
+func TestAnimatedPaintIntervalCapsPlaybackAnimationRate(t *testing.T) {
+	if animatedPaintInterval != 33*time.Millisecond {
+		t.Errorf("animated paint interval = %v, want 33 ms (~30 fps)", animatedPaintInterval)
+	}
+}
 
 // Every role a component draws on a surface must stay readable, whatever the
 // seed, the style and the appearance.

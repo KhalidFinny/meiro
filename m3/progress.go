@@ -7,6 +7,18 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// animatedPaintInterval caps custom animations at about 30 frames per second.
+// That keeps small indicators smooth while avoiding a repaint on every
+// display refresh, which can be twice as frequent on a 60 Hz screen and more
+// often on high-refresh displays.
+const animatedPaintInterval = 33 * time.Millisecond
+
+// animatePaint schedules the next paint of a moving drawing without
+// rebuilding the view.
+func animatePaint(p *ui.Painter) {
+	p.After(animatedPaintInterval)
+}
+
 // morph is one shape of the loading indicator: a circle bumped by n lobes of
 // amplitude a, as a fraction of the radius.
 type morph struct {
@@ -44,7 +56,7 @@ func loadingIndicator(c *ui.Context, size float32, shape, disc ui.Color) ui.Elem
 		e.Radius(Full).Background(disc)
 	}
 	e.Draw(func(p *ui.Painter, r ui.Rect) {
-		p.AnimationFrame()
+		animatePaint(p)
 		const step = 700 * time.Millisecond
 		ms := p.Now().UnixMilli()
 		phase := float64(ms) / float64(step.Milliseconds())
@@ -88,7 +100,7 @@ func Equalizer(c *ui.Context, size float32, playing bool, color ui.Color) ui.Ele
 	e := ui.Box(c).Size(size, size).Shrink(0)
 	e.Draw(func(p *ui.Painter, r ui.Rect) {
 		if playing {
-			p.AnimationFrame()
+			animatePaint(p)
 		}
 		now := float64(p.Now().UnixMilli()) / 1000
 		bar := r.W / 5

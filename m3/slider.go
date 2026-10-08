@@ -105,7 +105,7 @@ func Slider(c *ui.Context, value *float64, lo, hi float64, spec SliderSpec) ui.E
 				const wavelength = 30
 				phase := float32(0)
 				if spec.Waving {
-					p.AnimationFrame()
+					animatePaint(p)
 					phase = float32(p.Now().UnixMilli()%1800) / 1800 * wavelength
 				}
 				var path ui.Path
