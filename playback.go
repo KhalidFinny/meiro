@@ -70,10 +70,11 @@ func (a *app) stream(item youtube.MusicItem) {
 	a.streamGen++
 	gen := a.streamGen
 	a.resolving = true
+	client := a.client()
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
-		streamURL, total, err := a.resolveStream(ctx, item)
+		streamURL, total, err := resolveStream(ctx, client, item)
 		a.update(func() {
 			if gen != a.streamGen {
 				return // another track was chosen while this one resolved
@@ -96,8 +97,8 @@ func (a *app) stream(item youtube.MusicItem) {
 // resolveStream finds a URL ffmpeg can read. It asks YouTube through the
 // package first, and falls back to yt-dlp, which keeps working when
 // YouTube's player script has moved past what the package can decipher.
-func (a *app) resolveStream(ctx context.Context, item youtube.MusicItem) (string, time.Duration, error) {
-	if client := a.client(); client != nil {
+func resolveStream(ctx context.Context, client *youtube.Client, item youtube.MusicItem) (string, time.Duration, error) {
+	if client != nil {
 		if info, err := client.GetTrackInfo(ctx, item.VideoID); err == nil {
 			if format, ok := info.BestAudioFormat(); ok {
 				return format.PlayableURL(), parseDuration(info.VideoDetails.Length), nil
@@ -253,14 +254,15 @@ type lyricsState struct {
 // loadLyrics fetches the lyrics of the current track, once.
 func (a *app) loadLyrics() {
 	id := a.current.VideoID
-	if id == "" || a.lyrics.videoID == id || a.client() == nil {
+	client := a.client()
+	if id == "" || a.lyrics.videoID == id || client == nil {
 		return
 	}
 	a.lyrics = lyricsState{videoID: id, loading: true}
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		lyrics, err := a.client().GetLyrics(ctx, id)
+		lyrics, err := client.GetLyrics(ctx, id)
 		a.update(func() {
 			if a.lyrics.videoID != id {
 				return

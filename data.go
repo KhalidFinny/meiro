@@ -159,43 +159,45 @@ func pathArg(path string) string {
 
 // loadFeed fetches one of the pages that need no argument.
 func (a *app) loadFeed(page string) {
-	a.fetch(func(ctx context.Context) (*youtube.BrowseResult, error) {
+	a.fetch(func(ctx context.Context, client *youtube.Client) (*youtube.BrowseResult, error) {
 		switch page {
 		case pageHome:
-			return a.client().GetHomeFeed(ctx)
+			return client.GetHomeFeed(ctx)
 		case pageExplore:
-			return a.client().GetExplore(ctx)
+			return client.GetExplore(ctx)
 		default:
-			return a.client().GetAllLibrary(ctx)
+			return client.GetAllLibrary(ctx)
 		}
 	})
 }
 
 // loadDetail fetches an album, a playlist or an artist page.
 func (a *app) loadDetail(kind, id string) {
-	a.fetch(func(ctx context.Context) (*youtube.BrowseResult, error) {
+	a.fetch(func(ctx context.Context, client *youtube.Client) (*youtube.BrowseResult, error) {
 		switch kind {
 		case pageAlbum:
-			return a.client().GetAlbum(ctx, id)
+			return client.GetAlbum(ctx, id)
 		case pagePlaylist:
-			return a.client().GetPlaylist(ctx, id)
+			return client.GetPlaylist(ctx, id)
 		default:
-			return a.client().GetArtist(ctx, id)
+			return client.GetArtist(ctx, id)
 		}
 	})
 }
 
 // fetch runs a page load off the main thread and applies it, dropping the
-// result when a newer load has replaced it.
-func (a *app) fetch(load func(ctx context.Context) (*youtube.BrowseResult, error)) {
-	if a.client() == nil {
+// result when a newer load has replaced it. The client is the one in use when
+// the load began, handed to it because the app's own may change meanwhile.
+func (a *app) fetch(load func(ctx context.Context, client *youtube.Client) (*youtube.BrowseResult, error)) {
+	client := a.client()
+	if client == nil {
 		return
 	}
 	a.feed.loading, a.feed.err = true, ""
 	job := a.nextJob()
 	ctx := a.jobContext()
 	a.run(func() {
-		result, err := load(ctx)
+		result, err := load(ctx, client)
 		// A page is parsed into much more garbage than it keeps, and the
 		// runtime would sit on that memory for a while.
 		defer debug.FreeOSMemory()
@@ -250,7 +252,8 @@ func (a *app) runSearch(query string) {
 	a.settings.remember(query)
 	a.saveSettings()
 	a.search.sections = nil
-	if a.client() == nil {
+	client := a.client()
+	if client == nil {
 		return
 	}
 	a.search.loading, a.search.err, a.search.more = true, "", ""
@@ -260,7 +263,7 @@ func (a *app) runSearch(query string) {
 	ctx := a.jobContext()
 	kind := searchKinds[a.search.kind].kind
 	a.run(func() {
-		result, err := a.client().Search(ctx, query, youtube.SearchOptions{Type: kind})
+		result, err := client.Search(ctx, query, youtube.SearchOptions{Type: kind})
 		a.update(func() {
 			if job != a.job {
 				return
@@ -278,8 +281,8 @@ func (a *app) runSearch(query string) {
 
 // loadMore appends the next page of items to the one shown.
 func (a *app) loadMore() {
-	s := a.pageState()
-	if s.more == "" || a.client() == nil {
+	s, client := a.pageState(), a.client()
+	if s.more == "" || client == nil {
 		return
 	}
 	token, searching := s.more, a.router.Path() == "/search"
@@ -295,12 +298,12 @@ func (a *app) loadMore() {
 		var err error
 		if searching {
 			var result *youtube.SearchResult
-			if result, err = a.client().ContinueSearch(ctx, token); err == nil {
+			if result, err = client.ContinueSearch(ctx, token); err == nil {
 				items, next = result.Items, result.ContinuationToken
 			}
 		} else {
 			var result *youtube.BrowseResult
-			if result, err = a.client().ContinueBrowse(ctx, token); err == nil {
+			if result, err = client.ContinueBrowse(ctx, token); err == nil {
 				items, next = result.Items, result.ContinuationToken
 			}
 		}
@@ -452,7 +455,8 @@ func (a *app) playCollection(item youtube.MusicItem) {
 		a.play(item, []youtube.MusicItem{item}, 0)
 		return
 	}
-	if kind != pageAlbum && kind != pagePlaylist || a.client() == nil {
+	client := a.client()
+	if kind != pageAlbum && kind != pagePlaylist || client == nil {
 		return
 	}
 	key := itemKey("open", item)
@@ -466,9 +470,9 @@ func (a *app) playCollection(item youtube.MusicItem) {
 		var result *youtube.BrowseResult
 		var err error
 		if kind == pageAlbum {
-			result, err = a.client().GetAlbum(ctx, id)
+			result, err = client.GetAlbum(ctx, id)
 		} else {
-			result, err = a.client().GetPlaylist(ctx, id)
+			result, err = client.GetPlaylist(ctx, id)
 		}
 		var songs []youtube.MusicItem
 		if err == nil {
