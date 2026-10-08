@@ -108,6 +108,18 @@ func TestOpeningAnAlbumFromTheHomePage(t *testing.T) {
 	if len(a.playable) != 1 || a.playable[0].VideoID != "vid-3" {
 		t.Errorf("the album's play queue is %v", a.playable)
 	}
+	foundAlbumTrack := false
+	for _, row := range a.rows {
+		if row.kind == rowTrack && row.item.VideoID == "vid-3" {
+			foundAlbumTrack = true
+			if row.item.Thumbnail != a.detail.art {
+				t.Errorf("album row artwork = %q, want album artwork %q", row.item.Thumbnail, a.detail.art)
+			}
+		}
+	}
+	if !foundAlbumTrack {
+		t.Error("the album track row is missing")
+	}
 	if a.playable[0].Duration != "4:12" {
 		t.Errorf("the track length is %q", a.playable[0].Duration)
 	}
@@ -192,6 +204,28 @@ func TestPlayerBarShowsTheCurrentTrack(t *testing.T) {
 	tt.Key(0, ui.KeyEscape)
 	if a.npOpen {
 		t.Errorf("Escape did not close the full-screen player")
+	}
+}
+
+func TestPlayabilityErrorUsesYouTubeReason(t *testing.T) {
+	if err := playabilityError(youtube.Playability{Status: "OK"}); err != nil {
+		t.Fatalf("playable status returned an error: %v", err)
+	}
+	for _, status := range []youtube.Playability{
+		{Status: "UNPLAYABLE", Reason: "This video is unavailable."},
+		{Status: "LOGIN_REQUIRED", Messages: []string{"Sign in to confirm your age."}},
+		{Status: "AGE_CHECK_REQUIRED"},
+	} {
+		err := playabilityError(status)
+		if err == nil || !strings.Contains(err.Error(), status.Status) {
+			t.Errorf("playability error for %+v = %v", status, err)
+		}
+		if status.Reason != "" && !strings.Contains(err.Error(), status.Reason) {
+			t.Errorf("error %q omitted reason %q", err, status.Reason)
+		}
+		if len(status.Messages) > 0 && !strings.Contains(err.Error(), status.Messages[0]) {
+			t.Errorf("error %q omitted message %q", err, status.Messages[0])
+		}
 	}
 }
 
@@ -841,6 +875,7 @@ func TestParseSeedIsStrict(t *testing.T) {
 type memoryStore struct {
 	cookie    string
 	deleteErr error
+	onSave    func()
 }
 
 func (m *memoryStore) Load(context.Context) (string, error) {
@@ -850,9 +885,21 @@ func (m *memoryStore) Load(context.Context) (string, error) {
 	return m.cookie, nil
 }
 
-func (m *memoryStore) Save(_ context.Context, cookie string) error { m.cookie = cookie; return nil }
+func (m *memoryStore) Save(_ context.Context, cookie string) error {
+	m.cookie = cookie
+	if m.onSave != nil {
+		m.onSave()
+	}
+	return nil
+}
 
-func (m *memoryStore) Delete(context.Context) error { return m.deleteErr }
+func (m *memoryStore) Delete(context.Context) error {
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
+	m.cookie = ""
+	return nil
+}
 
 // The session saved by an earlier run is read in the background. A sign-out
 // that happens meanwhile must not be undone when it lands.
@@ -874,6 +921,82 @@ func TestSignOutIsNotUndoneByARestoreInFlight(t *testing.T) {
 	}
 }
 
+func TestRestoreDoesNotMarkAnInvalidSessionSignedIn(t *testing.T) {
+	a := newTestApp()
+	store := &memoryStore{cookie: "SAPISID=abc"}
+	a.store = store
+	a.newClient = func(auth *youtube.CookieAuth) *youtube.Client {
+		return youtube.NewClient(youtube.Options{
+			APIKey:     "test",
+			CookieAuth: auth,
+			HTTPClient: &http.Client{Transport: failingMusic{}},
+		})
+	}
+	a.run = func(work func()) { work() }
+
+	a.restoreAccount()
+	if a.signedIn || a.authed != nil {
+		t.Fatalf("failed restore left signedIn=%v client=%v", a.signedIn, a.authed)
+	}
+	if !strings.Contains(a.signIn.err, "Could not restore") || !strings.Contains(a.notice, "HTTP 500: down") {
+		t.Errorf("restore failure was not surfaced: sign-in error %q, notice %q", a.signIn.err, a.notice)
+	}
+	if store.cookie == "" {
+		t.Fatal("a transient restore failure discarded the saved cookie")
+	}
+}
+
+func TestRestoreSurfacesAnInvalidSavedCookie(t *testing.T) {
+	a := newTestApp()
+	store := &memoryStore{cookie: "SID=not-enough"}
+	a.store = store
+	a.run = func(work func()) { work() }
+
+	a.restoreAccount()
+	if a.signedIn || a.authed != nil {
+		t.Fatalf("invalid saved cookie left signedIn=%v client=%v", a.signedIn, a.authed)
+	}
+	if !strings.Contains(a.notice, "Could not restore") || !strings.Contains(a.notice, "SAPISID") {
+		t.Errorf("invalid saved cookie failure was not surfaced: %q", a.notice)
+	}
+	if store.cookie == "" {
+		t.Fatal("failed restore discarded the saved cookie")
+	}
+}
+
+func TestCancelledSignInDoesNotLeaveItsCookieSaved(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"accountName":"Me"}`))
+	}))
+	defer server.Close()
+
+	a := newTestApp()
+	store := &memoryStore{}
+	a.store = store
+	a.newClient = func(auth *youtube.CookieAuth) *youtube.Client {
+		return youtube.NewClient(youtube.Options{
+			BaseURL:                 server.URL,
+			APIKey:                  "test",
+			CookieAuth:              auth,
+			AllowInsecureCookieAuth: true,
+		})
+	}
+	var pending []func()
+	a.run = func(work func()) { pending = append(pending, work) }
+	a.signInWithGoogle()
+	a.signIn.cookie = "SAPISID=abc"
+	attempt := a.signIn.generation
+	store.onSave = a.dismissSignIn
+
+	a.finishSignIn(context.Background(), "SAPISID=abc", attempt)
+	if a.signedIn || store.cookie != "" || a.signIn.cookie != "" {
+		t.Fatalf("cancelled sign-in was retained: signedIn=%v cookieSaved=%v dialogCookie=%q", a.signedIn, store.cookie != "", a.signIn.cookie)
+	}
+	for _, work := range pending {
+		work()
+	}
+}
+
 func TestSignOutSaysWhenTheSessionStays(t *testing.T) {
 	a := newTestApp()
 	a.store = &memoryStore{cookie: "SAPISID=abc", deleteErr: errors.New("the keychain is locked")}
@@ -884,6 +1007,34 @@ func TestSignOutSaysWhenTheSessionStays(t *testing.T) {
 	}
 	if !strings.Contains(a.notice, "keychain is locked") {
 		t.Errorf("the failure was not reported: %q", a.notice)
+	}
+}
+
+func TestSignInWaitsForSignOutStorageDeletion(t *testing.T) {
+	a := newTestApp()
+	a.router.Push("/settings")
+	a.store = &memoryStore{cookie: "SAPISID=abc"}
+	var pending []func()
+	a.run = func(work func()) { pending = append(pending, work) }
+
+	a.signOut()
+	if !a.credentialDeletePending {
+		t.Fatal("sign-out did not mark credential deletion pending")
+	}
+	a.signInWithGoogle()
+	if a.signIn.open {
+		t.Fatal("a new sign-in opened before sign-out deleted the old credential")
+	}
+	if len(pending) != 1 {
+		t.Fatalf("queued %d jobs, want only credential deletion", len(pending))
+	}
+	pending[0]()
+	if a.credentialDeletePending {
+		t.Fatal("credential deletion remained pending after it finished")
+	}
+	a.signInWithGoogle()
+	if !a.signIn.open {
+		t.Fatal("sign-in did not open after credential deletion finished")
 	}
 }
 

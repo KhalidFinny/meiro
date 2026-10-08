@@ -34,9 +34,8 @@ func (a *app) view(c *ui.Context) {
 		c.Toast(a.notice)
 		a.notice = ""
 	}
-	if !a.signIn.open && a.signIn.cancel != nil {
-		a.signIn.cancel()
-		a.signIn.cancel = nil
+	if !a.signIn.open && (a.signIn.generation != 0 || a.signIn.cancel != nil || a.signIn.cookie != "") {
+		a.dismissSignIn()
 	}
 
 	bar := c.TitleBar()

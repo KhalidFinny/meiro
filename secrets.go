@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo"
+	"github.com/go-macos/keychain"
 )
 
 // Where the sign-in lives in the system's credential store.
@@ -60,29 +61,27 @@ type credentialStore interface {
 }
 
 // secret is a credential in the store the platform provides: the login
-// keychain on macOS, reached through the security tool, and the Secret
-// Service on Linux, reached through secret-tool. Other systems have neither
-// command, and the app keeps the cookie in a file there.
+// keychain on macOS and the Secret Service on Linux. Other systems have
+// neither, and the app keeps the cookie in a file there.
 type secret struct {
 	service string
 	account string
 }
 
-func (s secret) available() bool { return s.program() != "" }
+func (s secret) available() bool {
+	if runtime.GOOS == "darwin" {
+		return true
+	}
+	return s.program() != ""
+}
 
 // program returns the command the platform's store is reached through, and
 // the empty string when it has none.
 func (s secret) program() string {
-	switch runtime.GOOS {
-	case "darwin", "linux":
-	default:
+	if runtime.GOOS != "linux" {
 		return ""
 	}
-	name := "secret-tool"
-	if runtime.GOOS == "darwin" {
-		name = "security"
-	}
-	path, err := exec.LookPath(name)
+	path, err := exec.LookPath("secret-tool")
 	if err != nil {
 		return ""
 	}
@@ -90,20 +89,21 @@ func (s secret) program() string {
 }
 
 func (s secret) set(ctx context.Context, value string) error {
+	if runtime.GOOS == "darwin" {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := keychain.Set(s.service, s.account, []byte(value)); err != nil {
+			return fmt.Errorf("save the sign-in in the system keychain: %w", err)
+		}
+		return nil
+	}
 	program := s.program()
 	if program == "" {
 		return errNoCredentialStore
 	}
-	var command *exec.Cmd
-	if runtime.GOOS == "darwin" {
-		// The value is an argument because the tool reads it from a
-		// terminal otherwise, and the app has none. It is briefly visible
-		// in the process list, as it is with every tool that does this.
-		command = exec.CommandContext(ctx, program, "add-generic-password", "-U", "-s", s.service, "-a", s.account, "-w", value)
-	} else {
-		command = exec.CommandContext(ctx, program, "store", "--label="+s.service, "service", s.service, "account", s.account)
-		command.Stdin = strings.NewReader(value)
-	}
+	command := exec.CommandContext(ctx, program, "store", "--label="+s.service, "service", s.service, "account", s.account)
+	command.Stdin = strings.NewReader(value)
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("save the sign-in in the system keychain: %w", err)
 	}
@@ -111,16 +111,27 @@ func (s secret) set(ctx context.Context, value string) error {
 }
 
 func (s secret) get(ctx context.Context) (string, error) {
+	if runtime.GOOS == "darwin" {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		value, err := keychain.Get(s.service, s.account)
+		if errors.Is(err, keychain.ErrNotFound) {
+			return "", errSecretNotFound
+		}
+		if err != nil {
+			return "", fmt.Errorf("read the sign-in from the system keychain: %w", err)
+		}
+		if len(value) == 0 {
+			return "", errSecretNotFound
+		}
+		return string(value), nil
+	}
 	program := s.program()
 	if program == "" {
 		return "", errNoCredentialStore
 	}
-	var command *exec.Cmd
-	if runtime.GOOS == "darwin" {
-		command = exec.CommandContext(ctx, program, "find-generic-password", "-s", s.service, "-a", s.account, "-w")
-	} else {
-		command = exec.CommandContext(ctx, program, "lookup", "service", s.service, "account", s.account)
-	}
+	command := exec.CommandContext(ctx, program, "lookup", "service", s.service, "account", s.account)
 	output, err := command.Output()
 	if err != nil {
 		if missingSecret(err) {
@@ -136,32 +147,32 @@ func (s secret) get(ctx context.Context) (string, error) {
 }
 
 func (s secret) remove(ctx context.Context) error {
+	if runtime.GOOS == "darwin" {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := keychain.Delete(s.service, s.account); err != nil && !errors.Is(err, keychain.ErrNotFound) {
+			return fmt.Errorf("remove the sign-in from the system keychain: %w", err)
+		}
+		return nil
+	}
 	program := s.program()
 	if program == "" {
 		return nil
 	}
-	var command *exec.Cmd
-	if runtime.GOOS == "darwin" {
-		command = exec.CommandContext(ctx, program, "delete-generic-password", "-s", s.service, "-a", s.account)
-	} else {
-		command = exec.CommandContext(ctx, program, "clear", "service", s.service, "account", s.account)
-	}
+	command := exec.CommandContext(ctx, program, "clear", "service", s.service, "account", s.account)
 	if err := command.Run(); err != nil && !missingSecret(err) {
 		return fmt.Errorf("remove the sign-in from the system keychain: %w", err)
 	}
 	return nil
 }
 
-// missingSecret reports whether a store command failed because it holds no
-// such secret: the security tool exits 44, errSecItemNotFound, and
-// secret-tool exits 1, which on macOS would be some other failure.
+// missingSecret reports whether secret-tool failed because it holds no such
+// secret.
 func missingSecret(err error) bool {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) {
 		return false
-	}
-	if runtime.GOOS == "darwin" {
-		return exit.ExitCode() == 44
 	}
 	return exit.ExitCode() == 1
 }
@@ -200,9 +211,14 @@ func (s *keychainStore) forgetLegacy(ctx context.Context) {
 }
 
 func (s *keychainStore) Load(ctx context.Context) (string, error) {
+	var systemErr error
 	if s.system.available() {
-		if value, err := s.system.get(ctx); err == nil {
+		value, err := s.system.get(ctx)
+		if err == nil {
 			return value, nil
+		}
+		if !errors.Is(err, errSecretNotFound) {
+			systemErr = err
 		}
 	}
 	// The system store holds nothing, or would not answer, as a locked
@@ -210,6 +226,9 @@ func (s *keychainStore) Load(ctx context.Context) (string, error) {
 	// it in the file. Finding it there moves it into the store.
 	cookie, err := s.file.Load(ctx)
 	if err != nil {
+		if systemErr != nil && errors.Is(err, errNotSignedIn) {
+			return "", systemErr
+		}
 		return "", err
 	}
 	if s.system.available() {

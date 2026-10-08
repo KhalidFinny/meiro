@@ -388,6 +388,7 @@ func (a *app) setRows() {
 					r.track = len(a.playable)
 					if item.Thumbnail == "" {
 						item.Thumbnail = fallback
+						r.item = item
 					}
 					a.playable = append(a.playable, item)
 				}

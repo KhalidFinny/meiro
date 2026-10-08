@@ -168,6 +168,17 @@ func TestCookieFallBackToTheFileWhenTheStoreWillNotAnswer(t *testing.T) {
 	}
 }
 
+func TestCookieLoadReportsStoreFailureWithoutFallback(t *testing.T) {
+	storeErr := errors.New("the keychain is locked")
+	store := &keychainStore{
+		system: &fakeKeychain{usable: true, getErr: storeErr},
+		file:   newFileStore(filepath.Join(t.TempDir(), "cookie.txt")),
+	}
+	if _, err := store.Load(context.Background()); !errors.Is(err, storeErr) {
+		t.Fatalf("Load error = %v, want the keychain error", err)
+	}
+}
+
 func TestCookieMoveFromTheFileToTheSystemStore(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "cookie.txt")

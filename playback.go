@@ -253,6 +253,9 @@ func resolveStream(ctx context.Context, client *youtube.Client, item youtube.Mus
 	if client != nil {
 		info, err := client.GetTrackInfo(ctx, item.VideoID)
 		if err == nil {
+			if err := playabilityError(info.Playability); err != nil {
+				return "", 0, err
+			}
 			if format, ok := info.BestAudioFormat(); ok {
 				return format.PlayableURL(), parseDuration(info.VideoDetails.Length), nil
 			}
@@ -267,6 +270,20 @@ func resolveStream(ctx context.Context, client *youtube.Client, item youtube.Mus
 		return "", 0, errors.Join(err, direct)
 	}
 	return streamURL, total, nil
+}
+
+func playabilityError(status youtube.Playability) error {
+	if status.Status == "" || status.Status == "OK" {
+		return nil
+	}
+	reason := strings.TrimSpace(status.Reason)
+	if reason == "" {
+		reason = strings.Join(status.Messages, " ")
+	}
+	if reason == "" {
+		reason = status.Status
+	}
+	return fmt.Errorf("YouTube cannot play this track (%s): %s", status.Status, reason)
 }
 
 // ytDlpStream asks yt-dlp for a direct audio URL.

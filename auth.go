@@ -21,6 +21,8 @@ const musicURL = "https://music.youtube.com"
 type signInState struct {
 	open bool
 	err  string
+	// generation identifies work started by this dialog.
+	generation uint64
 	// cookie is the text the user pasted.
 	cookie string
 	// busy is set while a cookie is being imported or tried.
@@ -39,7 +41,77 @@ func (a *app) signInWithGoogle() {
 	if a.signIn.open {
 		return
 	}
-	a.signIn = signInState{open: true}
+	if a.credentialDeletePending {
+		a.notice = "Wait for sign-out to finish before signing in again."
+		return
+	}
+	a.signIn = signInState{open: true, generation: a.signInAttempt.Add(1)}
+}
+
+// dismissSignIn cancels pending work and drops the pasted credential when the
+// dialog closes. A session saved by an attempt that lost this race is removed
+// in the background, without touching a newer sign-in.
+func (a *app) dismissSignIn() {
+	attempt := a.signIn.generation
+	if attempt == 0 && a.signIn.cancel == nil && a.signIn.cookie == "" {
+		return
+	}
+	a.signInAttempt.Add(1)
+	if a.signIn.cancel != nil {
+		a.signIn.cancel()
+	}
+	a.signIn = signInState{}
+	if attempt != 0 && a.store != nil {
+		a.run(func() { a.deleteSavedSignInAttempt(attempt) })
+	}
+}
+
+// deleteSavedSignInAttempt removes a credential only if it still belongs to
+// the dismissed attempt. The lock makes this check and removal atomic with
+// respect to a newer sign-in saving its own credential.
+func (a *app) deleteSavedSignInAttempt(attempt uint64) {
+	a.credentialMu.Lock()
+	defer a.credentialMu.Unlock()
+	if a.store == nil || a.savedSignInAttempt != attempt {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := a.store.Delete(ctx); err != nil {
+		a.update(func() {
+			a.notice = "The cancelled sign-in could not be removed from storage: " + err.Error()
+		})
+		return
+	}
+	a.savedSignInAttempt = 0
+}
+
+// saveSignIn persists a validated cookie only while its dialog is still
+// active. If dismissal races the write, it removes that attempt's credential
+// before allowing a newer write to proceed.
+func (a *app) saveSignIn(ctx context.Context, cookie string, attempt uint64) error {
+	if a.store == nil {
+		return nil
+	}
+	a.credentialMu.Lock()
+	defer a.credentialMu.Unlock()
+	if ctx.Err() != nil || a.signInAttempt.Load() != attempt {
+		return context.Canceled
+	}
+	if err := a.store.Save(ctx, cookie); err != nil {
+		return err
+	}
+	a.savedSignInAttempt = attempt
+	if ctx.Err() == nil && a.signInAttempt.Load() == attempt {
+		return nil
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := a.store.Delete(cleanupCtx); err != nil {
+		return errors.Join(context.Canceled, err)
+	}
+	a.savedSignInAttempt = 0
+	return context.Canceled
 }
 
 // cookieNamePattern is where the value of a Cookie header starts, whether the
@@ -68,6 +140,7 @@ func (a *app) submitSignIn() {
 	if a.signIn.busy {
 		return
 	}
+	attempt := a.signIn.generation
 	cookie := cookieHeader(a.signIn.cookie)
 	if _, err := youtube.NewCookieAuth(cookie, youtube.CookieOptions{}); err != nil {
 		a.signIn.err = "That is not the cookie of a signed-in session: it has no SAPISID. Copy the whole value of the Cookie header."
@@ -78,7 +151,7 @@ func (a *app) submitSignIn() {
 	a.signIn.cancel = cancel
 	a.run(func() {
 		defer cancel()
-		a.finishSignIn(ctx, cookie)
+		a.finishSignIn(ctx, cookie, attempt)
 	})
 }
 
@@ -87,6 +160,7 @@ func (a *app) importSignIn(source importSource) {
 	if a.signIn.busy {
 		return
 	}
+	attempt := a.signIn.generation
 	a.signIn.busy, a.signIn.err = true, ""
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	a.signIn.cancel = cancel
@@ -95,19 +169,19 @@ func (a *app) importSignIn(source importSource) {
 		cookie, err := source.read(ctx)
 		if err != nil {
 			a.update(func() {
-				if a.signIn.open {
+				if a.signIn.open && a.signIn.generation == attempt && a.signInAttempt.Load() == attempt {
 					a.signIn.busy, a.signIn.err = false, err.Error()
 				}
 			})
 			return
 		}
-		a.finishSignIn(ctx, cookie)
+		a.finishSignIn(ctx, cookie, attempt)
 	})
 }
 
 // finishSignIn asks YouTube whom the cookie signs in and, when it takes it,
 // keeps it as the sign-in. It runs off the main thread.
-func (a *app) finishSignIn(ctx context.Context, cookie string) {
+func (a *app) finishSignIn(ctx context.Context, cookie string, attempt uint64) {
 	auth, err := youtube.NewCookieAuth(cookie, youtube.CookieOptions{})
 	var client *youtube.Client
 	var details *youtube.AccountDetails
@@ -115,14 +189,14 @@ func (a *app) finishSignIn(ctx context.Context, cookie string) {
 		client = a.newClient(auth)
 		details, err = client.GetAccountDetails(ctx)
 	}
-	if err == nil && details.Name == "" && details.ChannelID == "" {
-		err = errors.New("YouTube did not recognise the cookie as a signed-in session; it may have expired")
+	if err == nil {
+		err = validateAccountDetails(details)
 	}
-	if err == nil && a.store != nil {
-		err = a.store.Save(ctx, cookie)
+	if err == nil {
+		err = a.saveSignIn(ctx, cookie, attempt)
 	}
 	a.update(func() {
-		if !a.signIn.open { // the user gave up meanwhile
+		if !a.signIn.open || a.signIn.generation != attempt || a.signInAttempt.Load() != attempt {
 			return
 		}
 		a.signIn.busy = false
@@ -137,6 +211,13 @@ func (a *app) finishSignIn(ctx context.Context, cookie string) {
 	})
 }
 
+func validateAccountDetails(details *youtube.AccountDetails) error {
+	if details == nil || details.Name == "" && details.ChannelID == "" {
+		return errors.New("YouTube did not recognise the cookie as a signed-in session; it may have expired")
+	}
+	return nil
+}
+
 // restoreAccount loads the cookie saved by an earlier run and the account it
 // belongs to.
 func (a *app) restoreAccount() {
@@ -147,46 +228,81 @@ func (a *app) restoreAccount() {
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
+		a.credentialMu.Lock()
 		cookie, err := a.store.Load(ctx)
+		a.credentialMu.Unlock()
 		if err != nil {
+			if !errors.Is(err, errNotSignedIn) {
+				a.reportRestoreError(gen, err)
+			}
 			return // not signed in
 		}
 		auth, err := youtube.NewCookieAuth(cookie, youtube.CookieOptions{})
 		if err != nil {
+			a.reportRestoreError(gen, err)
 			return
 		}
 		client := a.newClient(auth)
 		details, err := client.GetAccountDetails(ctx)
+		if err == nil {
+			err = validateAccountDetails(details)
+		}
+		if err != nil {
+			a.reportRestoreError(gen, err)
+			return
+		}
 		a.update(func() {
 			if gen != a.accountGen {
 				return // the user signed in or out while the cookie was being read
 			}
-			a.authed, a.signedIn = client, true
-			if err == nil {
-				a.account = *details
-			}
+			a.authed, a.signedIn, a.account = client, true, *details
+			a.signIn.err = ""
 			a.onSignedIn()
 		})
+	})
+}
+
+func (a *app) reportRestoreError(gen int, err error) {
+	a.update(func() {
+		if gen != a.accountGen {
+			return // the user signed in or out while the cookie was being read
+		}
+		a.authed, a.signedIn, a.account = nil, false, youtube.AccountDetails{}
+		a.signIn.err = "Could not restore your YouTube Music session: " + err.Error()
+		a.notice = a.signIn.err
 	})
 }
 
 // signOut forgets the account.
 func (a *app) signOut() {
 	a.accountGen++
+	a.signInAttempt.Add(1)
+	if a.signIn.cancel != nil {
+		a.signIn.cancel()
+	}
+	a.signIn = signInState{}
 	a.authed, a.signedIn, a.account = nil, false, youtube.AccountDetails{}
 	a.onSignedIn()
 	if a.store == nil {
 		return
 	}
 	store := a.store
+	a.credentialDeletePending = true
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := store.Delete(ctx); err != nil {
-			a.update(func() {
-				a.notice = "Signed out, but the saved session could not be removed: " + err.Error()
-			})
+		a.credentialMu.Lock()
+		err := store.Delete(ctx)
+		if err == nil {
+			a.savedSignInAttempt = 0
 		}
+		a.credentialMu.Unlock()
+		a.update(func() {
+			a.credentialDeletePending = false
+			if err != nil {
+				a.notice = "Signed out, but the saved session could not be removed: " + err.Error()
+			}
+		})
 	})
 }
 
@@ -241,7 +357,7 @@ func (a *app) signInDialog(c *ui.Context) {
 				m3.LoadingIndicator(c, 40, false)
 			}
 			if m3.Button(c, m3.ButtonSpec{Label: "Cancel", Kind: m3.TextOnly, Key: "cancel-sign-in"}).Clicked() {
-				a.signIn.open = false
+				a.dismissSignIn()
 			}
 			if m3.Button(c, m3.ButtonSpec{Label: "Sign in", Disabled: a.signIn.busy || strings.TrimSpace(a.signIn.cookie) == "", Key: "submit-sign-in"}).Clicked() {
 				a.submitSignIn()

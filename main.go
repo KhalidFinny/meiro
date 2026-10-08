@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"path/filepath"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -48,6 +49,15 @@ type app struct {
 	account   youtube.AccountDetails
 	signedIn  bool
 	signIn    signInState
+	// signInAttempt invalidates work when a sign-in dialog is dismissed.
+	signInAttempt atomic.Uint64
+	// credentialMu serializes restore, save and delete operations so a late
+	// restore or cancelled sign-in cannot resurrect a removed session.
+	credentialMu       sync.Mutex
+	savedSignInAttempt uint64 // guarded by credentialMu
+	// credentialDeletePending prevents a new sign-in from racing a sign-out
+	// deletion and having its freshly saved session deleted afterward.
+	credentialDeletePending bool
 	// accountGen numbers the changes of account, so that the answer to a
 	// question asked before a sign-in or sign-out is not taken as its result.
 	accountGen int

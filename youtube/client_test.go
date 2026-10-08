@@ -70,6 +70,15 @@ func TestSearchUsesMusicContextAndMapsItems(t *testing.T) {
 	}
 }
 
+func TestReadBoundedBodyEnforcesTheLimit(t *testing.T) {
+	if got, err := readBoundedBody(strings.NewReader("1234"), 4, "test body"); err != nil || string(got) != "1234" {
+		t.Fatalf("reading an exact-limit body = %q, %v", got, err)
+	}
+	if got, err := readBoundedBody(strings.NewReader("12345"), 4, "test body"); err == nil || got != nil {
+		t.Fatalf("reading an oversized body = %q, %v, want an error and no data", got, err)
+	}
+}
+
 func TestVideoRenderersKeepTheirKindAndThumbnail(t *testing.T) {
 	client := NewClient(Options{})
 	result := client.newSearchResult(json.RawMessage(`{"contents":{"items":[
@@ -518,7 +527,7 @@ func TestGetAccountDetailsUsesCookie(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := NewClient(Options{HTTPClient: server.Client(), BaseURL: server.URL, APIKey: "key", CookieAuth: cookieAuth})
+	client := NewClient(Options{HTTPClient: server.Client(), BaseURL: server.URL, APIKey: "key", CookieAuth: cookieAuth, AllowInsecureCookieAuth: true})
 	account, err := client.GetAccountDetails(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -571,7 +580,7 @@ func TestCookieAuthenticationAndAllAccounts(t *testing.T) {
 		_, _ = w.Write([]byte(`{"accountSectionListRenderer":{"contents":[{"accountItemSectionRenderer":{"contents":[{"accountItemRenderer":{"accountName":{"simpleText":"Main channel"},"accountByline":{"simpleText":"Creator"},"channelHandle":{"runs":[{"text":"@main"}]},"endpoint":{"browseEndpoint":{"browseId":"UC-channel"}},"isSelected":true,"hasChannel":true,"accountPhoto":{"thumbnails":[{"url":"https://img.example/main"}]}}}]}}]}}`))
 	}))
 	defer server.Close()
-	client := NewClient(Options{BaseURL: server.URL, APIKey: "key", CookieAuth: cookieAuth})
+	client := NewClient(Options{BaseURL: server.URL, APIKey: "key", CookieAuth: cookieAuth, AllowInsecureCookieAuth: true})
 	accounts, err := client.GetAccounts(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -583,6 +592,46 @@ func TestCookieAuthenticationAndAllAccounts(t *testing.T) {
 	}
 	if _, err := NewCookieAuth("SID=not-enough", CookieOptions{}); err == nil {
 		t.Fatal("NewCookieAuth accepted cookies without SAPISID")
+	}
+}
+
+func TestCookieAuthRejectsUntrustedBaseURLByDefault(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{"accountName":"Me"}`))
+	}))
+	defer server.Close()
+	auth, err := NewCookieAuth("SAPISID=secret", CookieOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient(Options{BaseURL: server.URL, APIKey: "key", CookieAuth: auth})
+	if _, err := client.GetAccountDetails(context.Background()); err == nil || !strings.Contains(err.Error(), "refusing to send cookie authentication") {
+		t.Fatalf("GetAccountDetails error = %v, want refusal to send credentials", err)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("sent %d requests to untrusted base URL", requests.Load())
+	}
+}
+
+func TestIsYouTubeURLRequiresHTTPSAndAYouTubeHostname(t *testing.T) {
+	for input, want := range map[string]bool{
+		"https://youtube.com":              true,
+		"https://www.youtube.com":          true,
+		"https://music.youtube.com":        true,
+		"http://youtube.com":               false,
+		"https://youtube.com.evil.example": false,
+		"https://notyoutube.com":           false,
+		"https://youtube.com@evil.example": false,
+	} {
+		parsed, err := url.Parse(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := isYouTubeURL(parsed); got != want {
+			t.Errorf("isYouTubeURL(%q) = %v, want %v", input, got, want)
+		}
 	}
 }
 
