@@ -49,7 +49,7 @@ func TestSearchUsesMusicContextAndMapsItems(t *testing.T) {
 			t.Errorf("search filter protobuf = %x", filter)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"contents":{"musicShelfRenderer":{"contents":[{"musicResponsiveListItemRenderer":{"videoId":"track-1","flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"First track"}]}}},{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"An artist"}]}}}],"fixedColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"simpleText":"3:42"}}}],"thumbnail":{"musicThumbnailRenderer":{"thumbnail":{"thumbnails":[{"url":"https://img.example/small"},{"url":"https://img.example/large"}]}}}}}]}}}`))
+		_, _ = w.Write([]byte(`{"contents":{"musicShelfRenderer":{"contents":[{"musicResponsiveListItemRenderer":{"videoId":"track-1","flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"First track"}]}}},{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"An artist"}]}}}],"fixedColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"simpleText":"3:42"}}}],"thumbnail":{"musicThumbnailRenderer":{"thumbnail":{"thumbnails":[{"url":"https://img.example/small"},{"url":"https://img.example/large"}]}}}}}],"continuations":[{"nextContinuationData":{"continuation":"SEARCH_NEXT"}}]}}}`))
 	}))
 	defer server.Close()
 
@@ -64,6 +64,73 @@ func TestSearchUsesMusicContextAndMapsItems(t *testing.T) {
 	item := result.Items[0]
 	if item.VideoID != "track-1" || item.Title != "First track" || item.Subtitle != "An artist" || item.Duration != "3:42" || item.Thumbnail != "https://img.example/large" {
 		t.Errorf("mapped item = %#v", item)
+	}
+	if result.ContinuationToken != "SEARCH_NEXT" {
+		t.Errorf("search continuation = %q", result.ContinuationToken)
+	}
+}
+
+func TestContinueSearchSendsContinuationToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if r.URL.Path != "/youtubei/v1/search" || request["continuation"] != "SEARCH_NEXT" || request["query"] != nil {
+			t.Errorf("continuation request path=%q body=%#v", r.URL.Path, request)
+		}
+		_, _ = w.Write([]byte(`{"continuationContents":{"musicShelfContinuation":{"contents":[{"musicResponsiveListItemRenderer":{"videoId":"track-2","title":{"simpleText":"Second track"}}}]}}}`))
+	}))
+	defer server.Close()
+	client := NewClient(Options{BaseURL: server.URL, APIKey: "key"})
+	result, err := client.ContinueSearch(context.Background(), "SEARCH_NEXT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Items[0].VideoID != "track-2" {
+		t.Errorf("continued search items = %#v", result.Items)
+	}
+}
+
+func TestGetAllLibraryLoadsEverySectionContinuation(t *testing.T) {
+	var continuationRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request["browseId"] == "FEmusic_library_landing" {
+			_, _ = w.Write([]byte(`{"contents":{"sectionListRenderer":{"contents":[{"musicShelfRenderer":{"title":{"simpleText":"Songs"},"contents":[{"musicResponsiveListItemRenderer":{"videoId":"saved-song","title":{"simpleText":"Saved song"}}}],"continuations":[{"nextContinuationData":{"continuation":"SONGS_NEXT"}}]}},{"gridRenderer":{"title":{"simpleText":"Playlists"},"items":[{"gridPlaylistRenderer":{"playlistId":"PL1","title":{"simpleText":"Saved playlist"}}}],"continuations":[{"nextContinuationData":{"continuation":"PLAYLISTS_NEXT"}}]}}]}}}`))
+			return
+		}
+		token, _ := request["continuation"].(string)
+		continuationRequests.Add(1)
+		switch token {
+		case "SONGS_NEXT":
+			_, _ = w.Write([]byte(`{"continuationContents":{"musicShelfContinuation":{"contents":[{"musicResponsiveListItemRenderer":{"videoId":"saved-song-2","title":{"simpleText":"More saved songs"}}}]}}}`))
+		case "PLAYLISTS_NEXT":
+			_, _ = w.Write([]byte(`{"continuationContents":{"gridContinuation":{"items":[{"gridPlaylistRenderer":{"playlistId":"PL2","title":{"simpleText":"More playlists"}}}]}}}`))
+		default:
+			t.Errorf("unexpected browse request %#v", request)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(Options{BaseURL: server.URL, APIKey: "key"})
+	library, err := client.GetAllLibrary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continuationRequests.Load() != 2 {
+		t.Errorf("continuation requests = %d, want 2", continuationRequests.Load())
+	}
+	if len(library.Items) != 4 {
+		t.Errorf("library items = %#v", library.Items)
+	}
+	if len(library.Sections) != 2 || library.Sections[0].Title == "" || library.Sections[1].Title == "" {
+		t.Errorf("library sections = %#v", library.Sections)
+	}
+	if len(library.Pages) != 3 || library.ContinuationToken != "" {
+		t.Errorf("library pages/continuation = %d / %q", len(library.Pages), library.ContinuationToken)
 	}
 }
 
@@ -201,6 +268,9 @@ func TestGetAccountDetailsUsesOAuth(t *testing.T) {
 	if !strings.Contains(string(account.Raw), `"accountName":"Me"`) {
 		t.Errorf("account response = %s", account.Raw)
 	}
+	if account.Name != "Me" {
+		t.Errorf("account name = %q", account.Name)
+	}
 }
 
 func TestCookieAuthenticationAndAllAccounts(t *testing.T) {
@@ -240,7 +310,7 @@ func TestCookieAuthenticationAndAllAccounts(t *testing.T) {
 		if user["onBehalfOfUser"] != "UC-channel" {
 			t.Errorf("user context = %#v", user)
 		}
-		_, _ = w.Write([]byte(`{"accounts":[{"channelId":"UC-channel"}]}`))
+		_, _ = w.Write([]byte(`{"accounts":[{"accountName":{"simpleText":"Main channel"},"channelId":"UC-channel","channelHandle":"@main","isSelected":true,"accountPhoto":{"thumbnails":[{"url":"https://img.example/main"}]}}]}`))
 	}))
 	defer server.Close()
 	client := NewClient(Options{BaseURL: server.URL, APIKey: "key", CookieAuth: cookieAuth})
@@ -248,8 +318,10 @@ func TestCookieAuthenticationAndAllAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(accounts.Raw), "UC-channel") {
-		t.Errorf("accounts response = %s", accounts.Raw)
+	if !strings.Contains(string(accounts.Raw), "UC-channel") || len(accounts.Items) != 1 {
+		t.Errorf("accounts response = %#v", accounts)
+	} else if channel := accounts.Items[0]; channel.Name != "Main channel" || channel.ChannelID != "UC-channel" || channel.Handle != "@main" || !channel.Selected || channel.Thumbnail != "https://img.example/main" {
+		t.Errorf("parsed account channel = %#v", channel)
 	}
 	if _, err := NewCookieAuth("SID=not-enough", CookieOptions{}); err == nil {
 		t.Fatal("NewCookieAuth accepted cookies without SAPISID")

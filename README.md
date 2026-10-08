@@ -6,10 +6,11 @@ A small native desktop counter built with [MyGo](https://mygo.egoist.dev/).
 
 The independent [`youtube`](youtube) package is a read-only YouTube Music
 client. It supports OAuth device login and token refresh, account details,
-music search, home and explore feeds, the signed-in library, artist/album/
-playlist browsing, track metadata and stream formats, the up-next queue, and
-search suggestions. InnerTube responses are also exposed as raw JSON to keep
-the package useful as the upstream response formats evolve.
+music search, home and explore feeds, account and channel details, complete
+available library pages, artist/album/playlist browsing, track metadata and
+stream formats, the up-next queue, and search suggestions. Browse and search
+results expose continuation tokens and typed sections. InnerTube responses are
+also exposed as raw JSON to keep the package useful as upstream formats evolve.
 
 ```go
 import (

@@ -46,27 +46,58 @@ type MusicItem struct {
 
 // SearchResult contains the parsed music items and untouched InnerTube result.
 type SearchResult struct {
-	Items []MusicItem     `json:"items"`
-	Raw   json.RawMessage `json:"raw"`
+	Items             []MusicItem     `json:"items"`
+	ContinuationToken string          `json:"continuationToken,omitempty"`
+	Raw               json.RawMessage `json:"raw"`
 }
 
 // BrowseResult represents a Music browse page such as an artist, album,
 // playlist, home feed, explore page, library, or account settings.
 type BrowseResult struct {
-	Items []MusicItem     `json:"items"`
-	Raw   json.RawMessage `json:"raw"`
+	Items             []MusicItem       `json:"items"`
+	Sections          []MusicSection    `json:"sections,omitempty"`
+	ContinuationToken string            `json:"continuationToken,omitempty"`
+	Pages             []json.RawMessage `json:"pages,omitempty"`
+	Raw               json.RawMessage   `json:"raw"`
+}
+
+// MusicSection is a shelf or grid in a browse response. ContinuationToken can
+// be passed to ContinueBrowse to load more items in that section.
+type MusicSection struct {
+	Title             string          `json:"title,omitempty"`
+	Kind              string          `json:"kind"`
+	Items             []MusicItem     `json:"items"`
+	ContinuationToken string          `json:"continuationToken,omitempty"`
+	Raw               json.RawMessage `json:"raw"`
 }
 
 // AccountDetails contains the active account response. Account payloads vary
 // by client and sign-in state, so Raw is the authoritative representation.
 type AccountDetails struct {
-	Raw json.RawMessage `json:"raw"`
+	Name      string          `json:"name,omitempty"`
+	Email     string          `json:"email,omitempty"`
+	ChannelID string          `json:"channelId,omitempty"`
+	Thumbnail string          `json:"thumbnail,omitempty"`
+	Raw       json.RawMessage `json:"raw"`
 }
 
-// AccountList contains the raw response for all channels available to a
-// cookie-authenticated account.
+// AccountChannel describes a channel in the account switcher.
+type AccountChannel struct {
+	Name       string          `json:"name,omitempty"`
+	Byline     string          `json:"byline,omitempty"`
+	Handle     string          `json:"handle,omitempty"`
+	ChannelID  string          `json:"channelId,omitempty"`
+	Thumbnail  string          `json:"thumbnail,omitempty"`
+	Selected   bool            `json:"selected,omitempty"`
+	Disabled   bool            `json:"disabled,omitempty"`
+	HasChannel bool            `json:"hasChannel,omitempty"`
+	Raw        json.RawMessage `json:"raw"`
+}
+
+// AccountList contains channels available to a cookie-authenticated account.
 type AccountList struct {
-	Raw json.RawMessage `json:"raw"`
+	Items []AccountChannel `json:"items"`
+	Raw   json.RawMessage  `json:"raw"`
 }
 
 // TrackInfo contains player metadata and formats for one music track. URLs
@@ -131,7 +162,9 @@ func (c *Client) Search(ctx context.Context, query string, options SearchOptions
 	if err != nil {
 		return nil, err
 	}
-	return &SearchResult{Items: extractMusicItems(raw), Raw: raw}, nil
+	return &SearchResult{
+		Items: extractMusicItems(raw), ContinuationToken: continuationToken(raw), Raw: raw,
+	}, nil
 }
 
 func musicSearchParams(kind SearchType) (string, error) {
@@ -160,6 +193,68 @@ func (c *Client) GetExplore(ctx context.Context) (*BrowseResult, error) {
 
 func (c *Client) GetLibrary(ctx context.Context) (*BrowseResult, error) {
 	return c.browse(ctx, "FEmusic_library_landing")
+}
+
+// GetAllLibrary loads every section and continuation page available from the
+// library landing page. YouTube may still omit data based on account, region,
+// or subscription access.
+func (c *Client) GetAllLibrary(ctx context.Context) (*BrowseResult, error) {
+	result, err := c.GetLibrary(ctx)
+	if err != nil {
+		return nil, err
+	}
+	queue := browseContinuations(result)
+	seen := make(map[string]struct{})
+	for len(queue) > 0 {
+		token := queue[0]
+		queue = queue[1:]
+		if _, exists := seen[token]; exists {
+			continue
+		}
+		seen[token] = struct{}{}
+		if len(seen) > 1000 {
+			return nil, errors.New("youtube: library exceeded 1000 continuation pages")
+		}
+		page, err := c.ContinueBrowse(ctx, token)
+		if err != nil {
+			return nil, err
+		}
+		result.Items = append(result.Items, page.Items...)
+		result.Sections = append(result.Sections, page.Sections...)
+		result.Pages = append(result.Pages, page.Raw)
+		queue = append(queue, browseContinuations(page)...)
+	}
+	result.ContinuationToken = ""
+	for index := range result.Sections {
+		result.Sections[index].ContinuationToken = ""
+	}
+	return result, nil
+}
+
+// ContinueBrowse requests the next page for a browse or library section.
+func (c *Client) ContinueBrowse(ctx context.Context, token string) (*BrowseResult, error) {
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("youtube: browse continuation token is required")
+	}
+	raw, err := c.execute(ctx, "browse", map[string]any{"continuation": token})
+	if err != nil {
+		return nil, err
+	}
+	return newBrowseResult(raw), nil
+}
+
+// ContinueSearch requests the next page from SearchResult.ContinuationToken.
+func (c *Client) ContinueSearch(ctx context.Context, token string) (*SearchResult, error) {
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("youtube: search continuation token is required")
+	}
+	raw, err := c.execute(ctx, "search", map[string]any{"continuation": token})
+	if err != nil {
+		return nil, err
+	}
+	return &SearchResult{
+		Items: extractMusicItems(raw), ContinuationToken: continuationToken(raw), Raw: raw,
+	}, nil
 }
 
 func (c *Client) GetArtist(ctx context.Context, artistID string) (*BrowseResult, error) {
@@ -196,7 +291,37 @@ func (c *Client) GetAccountDetails(ctx context.Context) (*AccountDetails, error)
 	if err != nil {
 		return nil, err
 	}
-	return &AccountDetails{Raw: raw}, nil
+	details := &AccountDetails{Raw: raw}
+	if channels := extractAccountChannels(raw); len(channels) > 0 {
+		selected := channels[0]
+		for _, channel := range channels {
+			if channel.Selected {
+				selected = channel
+				break
+			}
+		}
+		details.Name = selected.Name
+		details.ChannelID = selected.ChannelID
+		details.Thumbnail = selected.Thumbnail
+	}
+	var direct struct {
+		Name      string `json:"accountName"`
+		Email     string `json:"email"`
+		ChannelID string `json:"channelId"`
+		Thumbnail string `json:"thumbnail"`
+	}
+	_ = json.Unmarshal(raw, &direct)
+	if details.Name == "" {
+		details.Name = direct.Name
+	}
+	details.Email = direct.Email
+	if details.ChannelID == "" {
+		details.ChannelID = direct.ChannelID
+	}
+	if details.Thumbnail == "" {
+		details.Thumbnail = direct.Thumbnail
+	}
+	return details, nil
 }
 
 // GetAccounts lists all channels available to a cookie-authenticated account.
@@ -212,7 +337,7 @@ func (c *Client) GetAccounts(ctx context.Context) (*AccountList, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &AccountList{Raw: raw}, nil
+	return &AccountList{Items: extractAccountChannels(raw), Raw: raw}, nil
 }
 
 // GetAccountSettings returns the account overview page for the signed-in user.
@@ -309,7 +434,209 @@ func (c *Client) GetSearchSuggestions(ctx context.Context, input string) (json.R
 }
 
 func newBrowseResult(raw json.RawMessage) *BrowseResult {
-	return &BrowseResult{Items: extractMusicItems(raw), Raw: raw}
+	return &BrowseResult{
+		Items: extractMusicItems(raw), Sections: extractMusicSections(raw),
+		ContinuationToken: continuationToken(raw), Pages: []json.RawMessage{raw}, Raw: raw,
+	}
+}
+
+func browseContinuations(result *BrowseResult) []string {
+	tokens := make([]string, 0, len(result.Sections)+1)
+	if result.ContinuationToken != "" {
+		tokens = append(tokens, result.ContinuationToken)
+	}
+	for _, section := range result.Sections {
+		if section.ContinuationToken != "" {
+			tokens = append(tokens, section.ContinuationToken)
+		}
+	}
+	return tokens
+}
+
+func continuationToken(raw json.RawMessage) string {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return ""
+	}
+	var walk func(any) string
+	walk = func(value any) string {
+		switch node := value.(type) {
+		case []any:
+			for _, child := range node {
+				if token := walk(child); token != "" {
+					return token
+				}
+			}
+		case map[string]any:
+			if command, ok := node["continuationCommand"].(map[string]any); ok {
+				if token, ok := command["token"].(string); ok && token != "" {
+					return token
+				}
+			}
+			if next, ok := node["nextContinuationData"].(map[string]any); ok {
+				if token, ok := next["continuation"].(string); ok && token != "" {
+					return token
+				}
+			}
+			if token, ok := node["continuation"].(string); ok && token != "" {
+				return token
+			}
+			keys := sortedKeys(node)
+			for _, key := range keys {
+				if token := walk(node[key]); token != "" {
+					return token
+				}
+			}
+		}
+		return ""
+	}
+	return walk(root)
+}
+
+func extractMusicSections(raw json.RawMessage) []MusicSection {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return nil
+	}
+	var sections []MusicSection
+	var walk func(any)
+	walk = func(value any) {
+		switch node := value.(type) {
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		case map[string]any:
+			for _, key := range sortedKeys(node) {
+				child := node[key]
+				if key == "musicShelfRenderer" || key == "musicPlaylistShelfRenderer" || key == "gridRenderer" || key == "musicCarouselShelfRenderer" {
+					if renderer, ok := child.(map[string]any); ok {
+						data, _ := json.Marshal(renderer)
+						sections = append(sections, MusicSection{
+							Title: rendererText(renderer["title"]), Kind: key,
+							Items: extractMusicItems(data), ContinuationToken: continuationToken(data), Raw: data,
+						})
+					}
+					continue
+				}
+				walk(child)
+			}
+		}
+	}
+	walk(root)
+	return sections
+}
+
+func extractAccountChannels(raw json.RawMessage) []AccountChannel {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return nil
+	}
+	var channels []AccountChannel
+	seen := make(map[string]struct{})
+	appendChannel := func(channel AccountChannel) {
+		identity := channel.ChannelID + channel.Name + channel.Handle
+		if identity == "" {
+			return
+		}
+		if _, exists := seen[identity]; exists {
+			return
+		}
+		seen[identity] = struct{}{}
+		channels = append(channels, channel)
+	}
+	var walk func(any)
+	walk = func(value any) {
+		switch node := value.(type) {
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		case map[string]any:
+			if hasAccountChannelFields(node) {
+				appendChannel(parseAccountChannel(node))
+				return
+			}
+			for _, key := range sortedKeys(node) {
+				child, ok := node[key].(map[string]any)
+				if !ok {
+					walk(node[key])
+					continue
+				}
+				if key == "accountItemRenderer" || key == "accountItem" {
+					appendChannel(parseAccountChannel(child))
+					continue
+				}
+				if hasAccountChannelFields(child) {
+					appendChannel(parseAccountChannel(child))
+					continue
+				}
+				walk(child)
+			}
+		}
+	}
+	walk(root)
+	return channels
+}
+
+func parseAccountChannel(renderer map[string]any) AccountChannel {
+	channel := AccountChannel{
+		Name:       rendererText(renderer["accountName"]),
+		Byline:     rendererText(renderer["accountByline"]),
+		Handle:     rendererText(renderer["channelHandle"]),
+		Thumbnail:  rendererThumbnail(renderer["accountPhoto"]),
+		Selected:   rendererBool(renderer["isSelected"]),
+		Disabled:   rendererBool(renderer["isDisabled"]),
+		HasChannel: rendererBool(renderer["hasChannel"]),
+		ChannelID:  navigationID(renderer["endpoint"]),
+	}
+	if channel.Name == "" {
+		channel.Name = rendererText(renderer["account_name"])
+	}
+	if channel.Name == "" {
+		channel.Name = rendererText(renderer["name"])
+	}
+	if channel.ChannelID == "" {
+		channel.ChannelID, _ = renderer["channelId"].(string)
+	}
+	if channel.Handle == "" {
+		channel.Handle, _ = renderer["handle"].(string)
+	}
+	if channel.Handle == "" {
+		channel.Handle, _ = renderer["channel_handle"].(string)
+	}
+	if channel.Byline == "" {
+		channel.Byline = rendererText(renderer["account_byline"])
+	}
+	if channel.Thumbnail == "" {
+		channel.Thumbnail = rendererThumbnail(renderer["account_photo"])
+	}
+	data, _ := json.Marshal(renderer)
+	channel.Raw = data
+	return channel
+}
+
+func hasAccountChannelFields(value map[string]any) bool {
+	for _, key := range []string{"channelId", "accountName", "account_name", "channelHandle", "channel_handle"} {
+		if value[key] != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func rendererBool(value any) bool {
+	result, _ := value.(bool)
+	return result
+}
+
+func sortedKeys(object map[string]any) []string {
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func extractMusicItems(raw json.RawMessage) []MusicItem {
@@ -367,7 +694,7 @@ func rendererKind(key string) (string, bool) {
 		return "video", true
 	case "playlistVideoRenderer", "playlistPanelVideoRenderer":
 		return "track", true
-	case "gridPlaylistRenderer", "musicPlaylistShelfRenderer":
+	case "gridPlaylistRenderer":
 		return "playlist", true
 	case "gridAlbumRenderer":
 		return "album", true
@@ -414,6 +741,9 @@ func parseMusicItem(kind string, renderer map[string]any) MusicItem {
 }
 
 func rendererText(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
 	object, ok := value.(map[string]any)
 	if !ok {
 		return ""
