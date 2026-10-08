@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+GO_VERSION="1.27.1"
+GO_ROOT="$HOME/.local/share/go/$GO_VERSION"
+GO_ARCHIVE_DIR="$HOME/.cache/amp/downloads"
+GO_ARCHIVE="$GO_ARCHIVE_DIR/go${GO_VERSION}.linux-$(uname -m).tar.gz"
+
+log() {
+	printf '[meiro setup] %s %s\n' "$(date --iso-8601=seconds)" "$*"
+}
+
+log "Checking GTK 3 runtime"
+if ! dpkg-query -W -f='${Status}' libgtk-3-0 2>/dev/null | grep -q 'install ok installed'; then
+	if [[ "$(id -u)" -eq 0 ]]; then
+		APT=(apt-get)
+	elif command -v sudo >/dev/null 2>&1; then
+		APT=(sudo -n apt-get)
+	else
+		printf 'GTK 3 is missing and neither root nor sudo is available.\n' >&2
+		exit 1
+	fi
+	"${APT[@]}" update
+	"${APT[@]}" install -y libgtk-3-0
+fi
+
+case "$(uname -m)" in
+	x86_64)
+		GO_SHA256="63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445"
+		GO_PLATFORM="amd64"
+		;;
+	aarch64 | arm64)
+		GO_SHA256="3450b45a3f9ee8568792736a5c5e70a1f2e9b36c35a8f74958c03e51d7d92bec"
+		GO_PLATFORM="arm64"
+		;;
+	*)
+		printf 'Unsupported Go architecture: %s\n' "$(uname -m)" >&2
+		exit 1
+		;;
+esac
+
+mkdir -p "$HOME/.local/share/go" "$HOME/.local/bin" "$GO_ARCHIVE_DIR"
+if [[ ! -x "$GO_ROOT/bin/go" ]] || [[ "$("$GO_ROOT/bin/go" version 2>/dev/null || true)" != "go version go${GO_VERSION} linux/${GO_PLATFORM}" ]]; then
+	GO_ARCHIVE="$GO_ARCHIVE_DIR/go${GO_VERSION}.linux-${GO_PLATFORM}.tar.gz"
+	log "Installing Go ${GO_VERSION}"
+	if [[ ! -f "$GO_ARCHIVE" ]] || [[ "$(sha256sum "$GO_ARCHIVE" | cut -d ' ' -f 1)" != "$GO_SHA256" ]]; then
+		curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_PLATFORM}.tar.gz" -o "$GO_ARCHIVE"
+	fi
+	echo "$GO_SHA256  $GO_ARCHIVE" | sha256sum --check --status || {
+		rm -f "$GO_ARCHIVE"
+		printf 'Go archive checksum verification failed.\n' >&2
+		exit 1
+	}
+	TMP_DIR="$(mktemp -d)"
+	trap 'rm -rf "$TMP_DIR"' EXIT
+	tar -xzf "$GO_ARCHIVE" -C "$TMP_DIR"
+	rm -rf "$GO_ROOT"
+	mv "$TMP_DIR/go" "$GO_ROOT"
+fi
+
+ln -sfn "$GO_ROOT/bin/go" "$HOME/.local/bin/go"
+ln -sfn "$GO_ROOT/bin/gofmt" "$HOME/.local/bin/gofmt"
+PROFILE="$HOME/.bash_profile"
+PROFILE_MARKER='# meiro Go toolchain'
+if ! grep -Fqx "$PROFILE_MARKER" "$PROFILE" 2>/dev/null; then
+	cat >> "$PROFILE" <<'EOF'
+
+# meiro Go toolchain
+case ":$PATH:" in
+	*:"$HOME/.local/bin":*) ;;
+	*) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+EOF
+fi
+export PATH="$HOME/.local/bin:$PATH"
+log "Go toolchain ready: $(go version)"

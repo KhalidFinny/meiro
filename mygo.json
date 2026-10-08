@@ -1,0 +1,6 @@
+{
+  "name": "Meiro Counter",
+  "identifier": "dev.egoist.meiro",
+  "version": "0.1.0",
+  "out": "build"
+}
