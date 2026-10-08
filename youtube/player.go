@@ -8,7 +8,11 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
+
+const playerCacheTTL = 5 * time.Minute
 
 var (
 	playerIDPattern        = regexp.MustCompile(`player/([A-Za-z0-9._-]+)/`)
@@ -24,39 +28,54 @@ type PlayerMetadata struct {
 	ScriptURL          string `json:"scriptUrl"`
 }
 
-func (c *Client) playerMetadata(ctx context.Context) (PlayerMetadata, error) {
+type playerScript struct {
+	metadata    PlayerMetadata
+	source      []byte
+	expiresAt   time.Time
+	decoderOnce sync.Once
+	decoder     *playerDecipher
+}
+
+func (p *playerScript) decipher() *playerDecipher {
+	p.decoderOnce.Do(func() {
+		p.decoder = newPlayerDecipher(p.source)
+	})
+	return p.decoder
+}
+
+func (c *Client) loadPlayer(ctx context.Context) (*playerScript, error) {
 	c.playerMu.Lock()
 	defer c.playerMu.Unlock()
-	if c.player != nil {
-		return *c.player, nil
+	if c.player != nil && time.Now().Before(c.player.expiresAt) {
+		return c.player, nil
 	}
 	iframe, err := c.getText(ctx, c.baseURL+"/iframe_api")
 	if err != nil {
-		return PlayerMetadata{}, fmt.Errorf("youtube: load player iframe API: %w", err)
+		return nil, fmt.Errorf("youtube: load player iframe API: %w", err)
 	}
 	normalized := strings.ReplaceAll(iframe, `\\/`, "/")
 	normalized = strings.ReplaceAll(normalized, `\/`, "/")
 	match := playerIDPattern.FindStringSubmatch(normalized)
 	if len(match) < 2 {
-		return PlayerMetadata{}, errors.New("youtube: player ID not found in iframe API")
+		return nil, errors.New("youtube: player ID not found in iframe API")
 	}
 	playerID := match[1]
 	scriptURL := fmt.Sprintf("%s/s/player/%s/player_es6.vflset/en_US/base.js", c.baseURL, playerID)
 	script, err := c.getText(ctx, scriptURL)
 	if err != nil {
-		return PlayerMetadata{}, fmt.Errorf("youtube: load player script: %w", err)
+		return nil, fmt.Errorf("youtube: load player script: %w", err)
 	}
 	timestampMatch := playerTimestampPattern.FindStringSubmatch(script)
 	if len(timestampMatch) < 2 {
-		return PlayerMetadata{}, errors.New("youtube: signature timestamp not found in player script")
+		return nil, errors.New("youtube: signature timestamp not found in player script")
 	}
 	var timestamp int
 	if _, err := fmt.Sscan(timestampMatch[1], &timestamp); err != nil {
-		return PlayerMetadata{}, fmt.Errorf("youtube: parse signature timestamp: %w", err)
+		return nil, fmt.Errorf("youtube: parse signature timestamp: %w", err)
 	}
 	metadata := PlayerMetadata{PlayerID: playerID, SignatureTimestamp: timestamp, ScriptURL: scriptURL}
-	c.player = &metadata
-	return metadata, nil
+	c.player = &playerScript{metadata: metadata, source: []byte(script), expiresAt: time.Now().Add(playerCacheTTL)}
+	return c.player, nil
 }
 
 func (c *Client) getText(ctx context.Context, endpoint string) (string, error) {

@@ -107,14 +107,14 @@ type Lyrics struct {
 	Raw         json.RawMessage `json:"raw"`
 }
 
-// TrackInfo contains player metadata and formats for one music track. URLs
-// that YouTube returns directly can be played by an audio player; encrypted
-// signatureCipher formats are exposed as-is and need player-script deciphering.
+// TrackInfo contains player metadata and resolved streaming formats for a
+// music track. Raw preserves YouTube's complete response.
 type TrackInfo struct {
 	VideoDetails  VideoDetails    `json:"videoDetails"`
 	StreamingData StreamingData   `json:"streamingData"`
 	Playability   Playability     `json:"playabilityStatus"`
 	Player        PlayerMetadata  `json:"player"`
+	CPN           string          `json:"cpn"`
 	Raw           json.RawMessage `json:"raw"`
 }
 
@@ -133,16 +133,22 @@ type Playability struct {
 }
 
 type StreamingData struct {
-	ExpiresInSeconds string        `json:"expiresInSeconds"`
-	Formats          []AudioFormat `json:"formats"`
-	AdaptiveFormats  []AudioFormat `json:"adaptiveFormats"`
+	ExpiresInSeconds      string        `json:"expiresInSeconds"`
+	Formats               []AudioFormat `json:"formats"`
+	AdaptiveFormats       []AudioFormat `json:"adaptiveFormats"`
+	DashManifestURL       string        `json:"dashManifestUrl,omitempty"`
+	HLSManifestURL        string        `json:"hlsManifestUrl,omitempty"`
+	ServerABRStreamingURL string        `json:"serverAbrStreamingUrl,omitempty"`
 }
 
-// AudioFormat describes a player response format. SignatureCipher may contain
-// encrypted URL/signature data and is not directly playable without decoding.
+// AudioFormat describes a player response format. URL preserves YouTube's
+// value, while ResolvedURL contains the processed stream URL when deciphering
+// succeeds. The signature cipher fields remain available for inspection.
 type AudioFormat struct {
 	Itag            int    `json:"itag"`
 	URL             string `json:"url"`
+	ResolvedURL     string `json:"resolvedUrl,omitempty"`
+	DecipherError   string `json:"decipherError,omitempty"`
 	MimeType        string `json:"mimeType"`
 	Bitrate         int    `json:"bitrate"`
 	AverageBitrate  int    `json:"averageBitrate"`
@@ -366,11 +372,11 @@ func (c *Client) GetTrackInfo(ctx context.Context, videoID string) (*TrackInfo, 
 	if strings.TrimSpace(videoID) == "" {
 		return nil, errors.New("youtube: video ID is required")
 	}
-	player, err := c.playerMetadata(ctx)
+	player, err := c.loadPlayer(ctx)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := c.execute(ctx, "player", map[string]any{
+	payload := map[string]any{
 		"videoId":        videoID,
 		"racyCheckOk":    true,
 		"contentCheckOk": true,
@@ -379,10 +385,14 @@ func (c *Client) GetTrackInfo(ctx context.Context, videoID string) (*TrackInfo, 
 				"vis":                0,
 				"splay":              false,
 				"lactMilliseconds":   "-1",
-				"signatureTimestamp": player.SignatureTimestamp,
+				"signatureTimestamp": player.metadata.SignatureTimestamp,
 			},
 		},
-	})
+	}
+	if c.playerPoToken != "" {
+		payload["serviceIntegrityDimensions"] = map[string]string{"poToken": c.playerPoToken}
+	}
+	raw, err := c.execute(ctx, "player", payload)
 	if err != nil {
 		return nil, err
 	}
@@ -394,34 +404,55 @@ func (c *Client) GetTrackInfo(ctx context.Context, videoID string) (*TrackInfo, 
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return nil, fmt.Errorf("youtube: decode track info: %w", err)
 	}
+	cpn, err := generateCPN()
+	if err != nil {
+		return nil, err
+	}
+	response.StreamingData.resolveAudioFormats(ctx, player.decipher(), c.clientVersion, c.playerPoToken, cpn)
 	return &TrackInfo{
 		VideoDetails:  response.VideoDetails,
 		StreamingData: response.StreamingData,
 		Playability:   response.Playability,
-		Player:        player,
+		Player:        player.metadata,
+		CPN:           cpn,
 		Raw:           raw,
 	}, nil
 }
 
-// BestAudioFormat selects the highest-bitrate audio-only format with a direct
-// URL. It returns false if the response only contains encrypted URL ciphers.
+// PlayableURL returns the deciphered URL when available, otherwise the direct
+// URL from YouTube. It returns an empty string when the format needs a
+// decipher operation that this player script did not support.
+func (format AudioFormat) PlayableURL() string {
+	if format.ResolvedURL != "" {
+		return format.ResolvedURL
+	}
+	if format.DecipherError != "" {
+		return ""
+	}
+	return format.URL
+}
+
+// BestAudioFormat selects the highest-bitrate audio-only format with a usable
+// URL. Both regular and adaptive formats are considered.
 func (track *TrackInfo) BestAudioFormat() (AudioFormat, bool) {
 	var best AudioFormat
 	found := false
-	for _, format := range track.StreamingData.AdaptiveFormats {
-		if !strings.HasPrefix(format.MimeType, "audio/") || format.URL == "" {
-			continue
-		}
-		bitrate := format.AverageBitrate
-		if bitrate == 0 {
-			bitrate = format.Bitrate
-		}
-		bestBitrate := best.AverageBitrate
-		if bestBitrate == 0 {
-			bestBitrate = best.Bitrate
-		}
-		if !found || bitrate > bestBitrate {
-			best, found = format, true
+	for _, formats := range [][]AudioFormat{track.StreamingData.Formats, track.StreamingData.AdaptiveFormats} {
+		for _, format := range formats {
+			if !strings.HasPrefix(format.MimeType, "audio/") || format.PlayableURL() == "" {
+				continue
+			}
+			bitrate := format.AverageBitrate
+			if bitrate == 0 {
+				bitrate = format.Bitrate
+			}
+			bestBitrate := best.AverageBitrate
+			if bestBitrate == 0 {
+				bestBitrate = best.Bitrate
+			}
+			if !found || bitrate > bestBitrate {
+				best, found = format, true
+			}
 		}
 	}
 	return best, found

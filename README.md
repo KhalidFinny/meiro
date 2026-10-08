@@ -44,10 +44,17 @@ func searchMusic(ctx context.Context) error {
 
 Public music metadata does not require OAuth. Account and library calls do. The
 client does not make playlist or account changes. YouTube may return encrypted
-stream signatures; those formats are preserved, while `BestAudioFormat`
-selects the best directly playable audio URL when one is available. The package
-does not include an audio decoder/player or JavaScript player-script
-deciphering yet.
+stream signatures. `GetTrackInfo` attempts the combined signature/`n` player
+transform with safe dependency extraction and supports common legacy
+transforms. It reports unsupported or
+unsafe player dependencies through each format's `DecipherError` rather than
+running them. It also adds the client version and a playback nonce (`cpn`) to
+resolved URLs. Use `BestAudioFormat` to select the highest-bitrate playable format, then
+`OpenAudioStream` to request its bytes. DASH, HLS, and server-ABR manifest URLs
+are exposed but are not parsed; SABR and DRM playback are not implemented.
+Some playback requires a PO token; pass a precomputed value with
+`Options.PlayerPoToken`. The package does not include an audio decoder/player
+or generate PO tokens.
 
 For sign-in across app restarts, provide an implementation of `youtube.TokenStore`
 that uses the operating system keychain. `OAuth.Restore` loads saved tokens, and

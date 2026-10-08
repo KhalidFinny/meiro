@@ -53,8 +53,10 @@ type Options struct {
 	VisitorData      string
 	Language         string
 	Country          string
-	OAuth            *OAuth
-	CookieAuth       *CookieAuth
+	// PlayerPoToken supplies an optional precomputed playback PO token.
+	PlayerPoToken string
+	OAuth         *OAuth
+	CookieAuth    *CookieAuth
 }
 
 // Client issues read-only YouTube Music requests.
@@ -69,12 +71,13 @@ type Client struct {
 	visitorData      string
 	language         string
 	country          string
+	playerPoToken    string
 	oauth            *OAuth
 	cookieAuth       *CookieAuth
 
 	configMu sync.Mutex
 	playerMu sync.Mutex
-	player   *PlayerMetadata
+	player   *playerScript
 }
 
 // NewClient constructs a client. No network request is made until a method is
@@ -116,6 +119,7 @@ func NewClient(options Options) *Client {
 		visitorData:      options.VisitorData,
 		language:         options.Language,
 		country:          options.Country,
+		playerPoToken:    options.PlayerPoToken,
 		oauth:            options.OAuth,
 		cookieAuth:       options.CookieAuth,
 	}
