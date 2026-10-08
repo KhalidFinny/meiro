@@ -1,6 +1,6 @@
 {
-  "name": "Meiro Counter",
-  "identifier": "dev.egoist.meiro",
+  "name": "Meiro",
+  "identifier": "com.elianiva.meiro",
   "version": "0.1.0",
   "out": "build"
 }

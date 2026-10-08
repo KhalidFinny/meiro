@@ -1,17 +1,89 @@
-# Meiro Counter
+# Meiro
 
-A small native desktop counter built with [MyGo](https://mygo.egoist.dev/).
+A small desktop client for YouTube Music, built with
+[MyGo](https://mygo.egoist.dev/). Its window is native UI that MyGo draws
+itself, so the app starts at once and needs no web frontend.
 
-## YouTube Music client
+## What it does
 
-The independent [`youtube`](youtube) package is a read-only YouTube Music
-client. It supports OAuth device login and token refresh, account details,
-music search, home and explore feeds, account and channel details, complete
-available library pages, artist/album/playlist browsing, track metadata and
-stream formats, lyrics, related tracks, listening recap, the up-next queue, and
-search suggestions. Browse and search results expose continuation tokens and
-typed sections. InnerTube responses are also exposed as raw JSON to keep the
-package useful as upstream formats evolve.
+- Browses the public catalogue: the home and explore feeds, search, albums,
+  playlists and artists.
+- Signs in with a Google account through the OAuth device flow, and keeps
+  the session across restarts.
+- Shows the account's library when signed in.
+- Plays music: play, pause, seek, previous, next and volume.
+
+The interface is black and white, and follows the desktop's light or dark
+appearance.
+
+## Use
+
+The sidebar names four pages: **Home** and **Explore** show the feeds YouTube
+Music offers, **Search** finds songs, albums, artists and playlists, and
+**Library** shows your own collection. Opening an album, an artist or a
+playlist from any of them shows its page.
+
+Click a song to play it, from that point in the page; double-click or press
+Enter to do the same from the keyboard. **Play** in a page's heading plays
+everything on it. The player bar below the pages has the transport, a
+scrubber, and the volume.
+
+| Keys | What they do |
+| --- | --- |
+| Space | Play or pause |
+| Cmd+← and Cmd+→ | Previous and next track |
+
+## Requirements
+
+- Go 1.27.1 or later.
+- `ffmpeg` to decode audio.
+- `yt-dlp` to resolve a stream URL when the `youtube` package cannot
+  decipher YouTube's player script, which is the usual case today.
+
+On macOS 12 or later, MyGo draws the interface with Metal and needs no
+other system libraries. On Linux, the app needs GTK 3; `.agents/setup`
+installs it in an Amp orb.
+
+## Run
+
+```sh
+go tool mygo dev
+```
+
+## Sign in
+
+Choose **Sign in with Google**. The dialog shows a code: open the page it
+links to and enter the code there. Meiro saves the tokens in the
+application's data directory, with permissions for your user only, so the
+next start is already signed in. **Sign out** removes them, here and at
+Google.
+
+## Test and build
+
+```sh
+go test ./...
+go tool mygo build
+```
+
+Every test but two runs without the network. The live ones resolve and play
+a real track, which also needs `ffmpeg` and `yt-dlp`:
+
+```sh
+MEIRO_LIVE_PLAYBACK=1 go test -run TestLivePlayback -v ./...
+```
+
+## Packages
+
+### `youtube`
+
+A read-only YouTube Music client. It supports OAuth device login and token
+refresh, account details, music search, home and explore feeds, account and
+channel details, complete available library pages, artist/album/playlist
+browsing, track metadata and stream formats, lyrics, related tracks,
+listening recap, the up-next queue, and search suggestions. Browse and
+search results expose continuation tokens and typed sections. InnerTube
+responses are also exposed as raw JSON to keep the package useful as
+upstream formats evolve.
 
 ```go
 import (
@@ -42,65 +114,25 @@ func searchMusic(ctx context.Context) error {
 }
 ```
 
-Public music metadata does not require OAuth. Account and library calls do. The
-client does not make playlist or account changes. YouTube may return encrypted
-stream signatures. `GetTrackInfo` attempts the combined signature/`n` player
-transform with safe dependency extraction and supports common legacy
-transforms. It reports unsupported or
-unsafe player dependencies through each format's `DecipherError` rather than
-running them. It also adds the client version and a playback nonce (`cpn`) to
-resolved URLs. Use `BestAudioFormat` to select the highest-bitrate playable format, then
-`OpenAudioStream` to request its bytes. DASH, HLS, and server-ABR manifest URLs
-are exposed but are not parsed; SABR and DRM playback are not implemented.
-Some playback requires a PO token; pass a precomputed value with
-`Options.PlayerPoToken`. The package does not include an audio decoder/player
-or generate PO tokens.
+Public music metadata does not require OAuth. Account and library calls do.
+The client does not make playlist or account changes.
 
-For sign-in across app restarts, provide an implementation of `youtube.TokenStore`
-that uses the operating system keychain. `OAuth.Restore` loads saved tokens, and
-device login and token refresh save them through that store. The package does
-not store OAuth secrets in a plain-text file.
+For sign-in across app restarts, provide an implementation of
+`youtube.TokenStore`. `OAuth.Restore` loads saved tokens, and device login
+and token refresh save them through that store. Meiro implements the store
+as a file only its user can read; a keychain-backed store is the stronger
+choice where one is available.
 
-Cookie auth can list all channels available to the account. OAuth returns only
-the active channel. Cookies are sensitive credentials; do not log them or put
-them in source control.
+Cookie auth can list all channels available to the account. OAuth returns
+only the active channel. Cookies are sensitive credentials; do not log them
+or put them in source control.
 
-```go
-cookieAuth, err := youtube.NewCookieAuth(browserCookieHeader, youtube.CookieOptions{
-	AccountIndex: 0,
-})
-if err != nil {
-	return err
-}
-music := youtube.NewClient(youtube.Options{CookieAuth: cookieAuth})
-accounts, err := music.GetAccounts(ctx)
-if err != nil {
-	return err
-}
-fmt.Printf("Found %d accounts\n", len(accounts.Items))
-```
+### `player`
 
-## Run
-
-```sh
-go tool mygo dev
-```
-
-Use `+` and `−` to change the count.
-
-## Test and build
-
-```sh
-go test ./...
-go tool mygo build
-```
-
-## Requirements
-
-This module requires Go 1.27.1 or later. The counter uses MyGo's native UI, so it does not need Bun or a web frontend.
-
-On macOS 12 or later, MyGo draws the native UI with Metal and needs no additional system libraries. Install [Go](https://go.dev/dl/) on macOS. `.agents/setup` only covers Linux.
-
-On Linux, the app needs GTK 3. In an Amp orb, `.agents/setup` installs GTK 3 and the pinned Go 1.27.1 toolchain.
-
-See the MyGo [getting started guide](https://mygo.egoist.dev/docs/getting-started) for platform requirements and the [native UI guide](https://mygo.egoist.dev/docs/ui) for how MyGo draws the interface.
+Plays one stream at a time. It asks `ffmpeg`, in a child process, to decode
+a stream into signed 16-bit stereo PCM, and hands those samples to
+[oto](https://github.com/ebitengine/oto), which writes them to the audio
+device. Decoding in a child process keeps the app free of cgo and of codecs
+of its own, so it plays whatever `ffmpeg` reads. Seeking restarts the decode
+at the new position, which is why the app asks for a direct media URL rather
+than downloading the track first.
