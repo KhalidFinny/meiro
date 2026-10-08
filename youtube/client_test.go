@@ -165,17 +165,27 @@ func TestBootstrapLoadsMusicAPIConfig(t *testing.T) {
 
 func TestGetTrackInfoChoosesBestDirectAudio(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/youtubei/v1/player" {
-			t.Fatalf("request path = %q", r.URL.Path)
+		switch r.URL.Path {
+		case "/iframe_api":
+			_, _ = w.Write([]byte(`var playerUrl="player\/test-player\/player_ias.vflset/en_US/base.js";`))
+		case "/s/player/test-player/player_es6.vflset/en_US/base.js":
+			_, _ = w.Write([]byte(`var config={signatureTimestamp:19372};`))
+		case "/youtubei/v1/player":
+			var request map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request["videoId"] != "track-2" || request["racyCheckOk"] != true || request["contentCheckOk"] != true {
+				t.Errorf("player payload = %#v", request)
+			}
+			playback := request["playbackContext"].(map[string]any)["contentPlaybackContext"].(map[string]any)
+			if playback["signatureTimestamp"] != float64(19372) {
+				t.Errorf("signatureTimestamp = %v", playback["signatureTimestamp"])
+			}
+			_, _ = w.Write([]byte(`{"videoDetails":{"videoId":"track-2","title":"Song","author":"Artist","lengthSeconds":"201"},"playabilityStatus":{"status":"OK"},"streamingData":{"adaptiveFormats":[{"itag":140,"mimeType":"audio/mp4","bitrate":128000,"url":"https://audio.example/low"},{"itag":251,"mimeType":"audio/webm","averageBitrate":160000,"url":"https://audio.example/high"},{"itag":999,"mimeType":"audio/webm","averageBitrate":256000,"signatureCipher":"s=encrypted"},{"itag":18,"mimeType":"video/mp4","url":"https://video.example/video"}]}}`))
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
 		}
-		var request map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatal(err)
-		}
-		if request["videoId"] != "track-2" || request["racyCheckOk"] != true || request["contentCheckOk"] != true {
-			t.Errorf("player payload = %#v", request)
-		}
-		_, _ = w.Write([]byte(`{"videoDetails":{"videoId":"track-2","title":"Song","author":"Artist","lengthSeconds":"201"},"playabilityStatus":{"status":"OK"},"streamingData":{"adaptiveFormats":[{"itag":140,"mimeType":"audio/mp4","bitrate":128000,"url":"https://audio.example/low"},{"itag":251,"mimeType":"audio/webm","averageBitrate":160000,"url":"https://audio.example/high"},{"itag":999,"mimeType":"audio/webm","averageBitrate":256000,"signatureCipher":"s=encrypted"},{"itag":18,"mimeType":"video/mp4","url":"https://video.example/video"}]}}`))
 	}))
 	defer server.Close()
 	client := NewClient(Options{BaseURL: server.URL, APIKey: "key"})
@@ -186,6 +196,9 @@ func TestGetTrackInfoChoosesBestDirectAudio(t *testing.T) {
 	format, ok := track.BestAudioFormat()
 	if !ok || format.Itag != 251 || format.URL != "https://audio.example/high" {
 		t.Errorf("best audio = %#v, found %v", format, ok)
+	}
+	if track.Player.PlayerID != "test-player" || track.Player.SignatureTimestamp != 19372 {
+		t.Errorf("player metadata = %#v", track.Player)
 	}
 }
 

@@ -107,6 +107,7 @@ type TrackInfo struct {
 	VideoDetails  VideoDetails    `json:"videoDetails"`
 	StreamingData StreamingData   `json:"streamingData"`
 	Playability   Playability     `json:"playabilityStatus"`
+	Player        PlayerMetadata  `json:"player"`
 	Raw           json.RawMessage `json:"raw"`
 }
 
@@ -358,15 +359,20 @@ func (c *Client) GetTrackInfo(ctx context.Context, videoID string) (*TrackInfo, 
 	if strings.TrimSpace(videoID) == "" {
 		return nil, errors.New("youtube: video ID is required")
 	}
+	player, err := c.playerMetadata(ctx)
+	if err != nil {
+		return nil, err
+	}
 	raw, err := c.execute(ctx, "player", map[string]any{
 		"videoId":        videoID,
 		"racyCheckOk":    true,
 		"contentCheckOk": true,
 		"playbackContext": map[string]any{
 			"contentPlaybackContext": map[string]any{
-				"vis":              0,
-				"splay":            false,
-				"lactMilliseconds": "-1",
+				"vis":                0,
+				"splay":              false,
+				"lactMilliseconds":   "-1",
+				"signatureTimestamp": player.SignatureTimestamp,
 			},
 		},
 	})
@@ -385,6 +391,7 @@ func (c *Client) GetTrackInfo(ctx context.Context, videoID string) (*TrackInfo, 
 		VideoDetails:  response.VideoDetails,
 		StreamingData: response.StreamingData,
 		Playability:   response.Playability,
+		Player:        player,
 		Raw:           raw,
 	}, nil
 }

@@ -73,6 +73,8 @@ type Client struct {
 	cookieAuth       *CookieAuth
 
 	configMu sync.Mutex
+	playerMu sync.Mutex
+	player   *PlayerMetadata
 }
 
 // NewClient constructs a client. No network request is made until a method is
