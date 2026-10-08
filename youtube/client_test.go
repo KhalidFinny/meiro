@@ -370,6 +370,40 @@ func TestUpNextKeepsPlaylistContextAndContinuesRadioQueue(t *testing.T) {
 	}
 }
 
+func TestGetAllPlaylistLoadsContinuationPages(t *testing.T) {
+	var continuationRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if r.URL.Path != "/youtubei/v1/browse" {
+			t.Fatalf("request path = %q, want /browse", r.URL.Path)
+		}
+		if request["browseId"] == "VLPL123" {
+			_, _ = w.Write([]byte(`{"contents":{"musicPlaylistShelfRenderer":{"contents":[{"playlistVideoRenderer":{"videoId":"playlist-1","title":{"simpleText":"First song"}}}],"continuations":[{"nextContinuationData":{"continuation":"PLAYLIST_MORE"}}]}}}`))
+			return
+		}
+		if request["continuation"] != "PLAYLIST_MORE" {
+			t.Errorf("continuation request = %#v", request)
+		}
+		continuationRequests.Add(1)
+		_, _ = w.Write([]byte(`{"continuationContents":{"musicPlaylistShelfContinuation":{"contents":[{"playlistVideoRenderer":{"videoId":"playlist-2","title":{"simpleText":"Second song"}}}]}}}`))
+	}))
+	defer server.Close()
+	client := NewClient(Options{BaseURL: server.URL, APIKey: "key"})
+	playlist, err := client.GetAllPlaylist(context.Background(), "PL123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continuationRequests.Load() != 1 || len(playlist.Items) != 2 {
+		t.Fatalf("playlist has %d items after %d continuation calls: %#v", len(playlist.Items), continuationRequests.Load(), playlist.Items)
+	}
+	if playlist.Items[0].VideoID != "playlist-1" || playlist.Items[1].VideoID != "playlist-2" || len(playlist.Pages) != 2 || playlist.ContinuationToken != "" {
+		t.Errorf("playlist continuation result = %#v", playlist)
+	}
+}
+
 func TestLyricsRelatedAndRecapUseReadOnlyEndpoints(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request map[string]any

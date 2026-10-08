@@ -303,6 +303,41 @@ func (c *Client) GetPlaylist(ctx context.Context, playlistID string) (*BrowseRes
 	return c.browse(ctx, playlistID)
 }
 
+// GetAllPlaylist loads every browse continuation available for a playlist.
+// YouTube may still omit tracks based on account, region, or access.
+func (c *Client) GetAllPlaylist(ctx context.Context, playlistID string) (*BrowseResult, error) {
+	result, err := c.GetPlaylist(ctx, playlistID)
+	if err != nil {
+		return nil, err
+	}
+	queue := browseContinuations(result)
+	seen := make(map[string]struct{})
+	for len(queue) > 0 {
+		token := queue[0]
+		queue = queue[1:]
+		if _, exists := seen[token]; exists {
+			continue
+		}
+		seen[token] = struct{}{}
+		if len(seen) > 1000 {
+			return nil, errors.New("youtube: playlist exceeded 1000 continuation pages")
+		}
+		page, err := c.ContinueBrowse(ctx, token)
+		if err != nil {
+			return nil, err
+		}
+		result.Items = append(result.Items, page.Items...)
+		result.Sections = append(result.Sections, page.Sections...)
+		result.Pages = append(result.Pages, page.Raw)
+		queue = append(queue, browseContinuations(page)...)
+	}
+	result.ContinuationToken = ""
+	for index := range result.Sections {
+		result.Sections[index].ContinuationToken = ""
+	}
+	return result, nil
+}
+
 // GetAccountDetails returns the active signed-in account. It requires cookie
 // authentication.
 func (c *Client) GetAccountDetails(ctx context.Context) (*AccountDetails, error) {
