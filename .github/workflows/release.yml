@@ -1,0 +1,95 @@
+name: Release
+
+# Push a tag such as v0.2.0 to build the app for every platform and publish
+# it as a GitHub release. Run it by hand to build without publishing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install GTK
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-0
+      - run: go vet ./...
+      - run: go test ./...
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: darwin-arm64, target: darwin/arm64, os: macos-latest }
+          - { platform: darwin-amd64, target: darwin/amd64, os: macos-latest }
+          - { platform: linux-amd64, target: linux/amd64, os: ubuntu-latest }
+          - { platform: linux-arm64, target: linux/arm64, os: ubuntu-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The tag is the version: v1.2.3 builds as 1.2.3.
+      - name: Set the version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="${GITHUB_REF_NAME#v}"; else version="0.0.0"; fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          jq --arg v "$version" '.version = $v' mygo.json > mygo.json.new
+          mv mygo.json.new mygo.json
+
+      - name: Fetch ffmpeg and yt-dlp
+        run: scripts/fetch-tools.sh "${{ matrix.platform }}"
+
+      - name: Build
+        run: go tool mygo build -platform "${{ matrix.target }}" -o dist
+
+      - name: Collect the downloads
+        run: |
+          mkdir artifacts
+          arch="${{ matrix.platform }}"; arch="${arch#*-}"
+          case "${{ matrix.platform }}" in
+            darwin-*)
+              dmg="$(find "dist/${{ matrix.platform }}" -maxdepth 1 -name '*.dmg')"
+              cp "$dmg" "artifacts/Meiro-${VERSION}-macos-${arch}.dmg"
+              ;;
+            linux-*)
+              cp dist/${{ matrix.platform }}/*.tar.gz dist/${{ matrix.platform }}/*.deb artifacts/
+              ;;
+          esac
+          ls -la artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meiro-${{ matrix.platform }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums
+        run: cd artifacts && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" artifacts/* --title "Meiro ${GITHUB_REF_NAME#v}" --generate-notes --verify-tag
