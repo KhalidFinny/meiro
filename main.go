@@ -95,6 +95,14 @@ type app struct {
 	shuffle   bool
 	repeat    int // 0 off, 1 the queue, 2 the track
 	playErr   string
+	// resolving is set from the moment a track is chosen until its audio URL
+	// is found, and streamGen numbers those requests, so that only the latest
+	// one plays when it lands.
+	resolving bool
+	streamGen int
+	// opening is the album or playlist whose first song is being looked up
+	// to play, so that a second press does not look it up again.
+	opening string
 
 	// job numbers page loads, so a slow one for a page the user has left
 	// is dropped when it lands.

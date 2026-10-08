@@ -28,13 +28,17 @@ func (a *app) transport(c *ui.Context, size float32, gap float32) {
 		if m3.IconButton(c, spec).Clicked() {
 			a.previous()
 		}
-		playing := a.player.Playing()
+		loading := a.loading()
+		playing := a.player.Playing() && !loading
 		icon, label := m3.IconPlay, "Play"
-		if playing {
+		switch {
+		case loading:
+			label = "Loading"
+		case playing:
 			icon, label = m3.IconPause, "Pause"
 		}
 		if m3.IconButton(c, m3.IconButtonSpec{
-			Icon: icon, Label: label, Kind: m3.FilledIcon, Dimension: size, Morph: true, Selected: playing, Key: "play-pause",
+			Icon: icon, Label: label, Kind: m3.FilledIcon, Dimension: size, Morph: true, Selected: playing, Loading: loading, Key: "play-pause",
 		}).Clicked() {
 			a.togglePlay()
 		}

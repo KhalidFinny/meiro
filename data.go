@@ -436,6 +436,11 @@ func (a *app) playCollection(item youtube.MusicItem) {
 	if kind != pageAlbum && kind != pagePlaylist || a.client() == nil {
 		return
 	}
+	key := itemKey("open", item)
+	if a.opening == key {
+		return
+	}
+	a.opening = key
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -462,6 +467,9 @@ func (a *app) playCollection(item youtube.MusicItem) {
 			}
 		}
 		a.update(func() {
+			if a.opening == key {
+				a.opening = ""
+			}
 			if len(songs) > 0 {
 				a.play(songs[0], songs, 0)
 			}

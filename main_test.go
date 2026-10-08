@@ -503,3 +503,32 @@ func TestSignInDialogOffersBrowsersInADropdown(t *testing.T) {
 		}
 	}
 }
+
+func TestPlayingShowsLoadingAndIgnoresASecondPress(t *testing.T) {
+	a := newTestApp()
+	a.run = func(work func()) {} // the audio never resolves
+	item := youtube.MusicItem{VideoID: "vid-1", Title: "Ambient One", Duration: "3:33"}
+
+	a.play(item, []youtube.MusicItem{item}, 0)
+	if !a.loading() || a.streamGen != 1 {
+		t.Fatalf("playing did not start loading: loading=%v, gen=%d", a.loading(), a.streamGen)
+	}
+	tt := ui.NewTester(a.view, 1000, 700)
+	if _, ok := tt.Find("Loading"); !ok {
+		t.Errorf("the play button does not show it is loading: %q", tt.Texts())
+	}
+
+	// Pressing play again, in a row or on the button, must not ask twice.
+	a.play(item, []youtube.MusicItem{item}, 0)
+	a.togglePlay()
+	if a.streamGen != 1 {
+		t.Errorf("a second press started another request: gen=%d", a.streamGen)
+	}
+
+	// Choosing another track supersedes the first one.
+	other := youtube.MusicItem{VideoID: "vid-2", Title: "Ambient Two"}
+	a.play(other, []youtube.MusicItem{item, other}, 1)
+	if a.streamGen != 2 || !a.loading() {
+		t.Errorf("the second track did not start: gen=%d, loading=%v", a.streamGen, a.loading())
+	}
+}

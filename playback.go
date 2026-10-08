@@ -33,6 +33,9 @@ func (a *app) play(item youtube.MusicItem, queue []youtube.MusicItem, index int)
 		}
 	}
 	a.index = index
+	if a.resolving && a.current.VideoID == item.VideoID {
+		return // this track is already on its way
+	}
 	a.start(item)
 }
 
@@ -53,16 +56,26 @@ func (a *app) start(item youtube.MusicItem) {
 	a.stream(item)
 }
 
+// loading reports whether the track chosen is not making sound yet: its audio
+// is being found, or ffmpeg is still opening it.
+func (a *app) loading() bool {
+	return a.resolving || a.player.Buffering()
+}
+
 // stream resolves a track's audio off the main thread and plays it.
 func (a *app) stream(item youtube.MusicItem) {
+	a.streamGen++
+	gen := a.streamGen
+	a.resolving = true
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		streamURL, total, err := a.resolveStream(ctx, item)
 		a.update(func() {
-			if a.current.VideoID != item.VideoID {
+			if gen != a.streamGen {
 				return // another track was chosen while this one resolved
 			}
+			a.resolving = false
 			if err != nil {
 				a.playErr = err.Error()
 				return
@@ -149,6 +162,8 @@ func (a *app) advance() {
 		a.start(a.queue[a.index])
 		return
 	}
+	a.streamGen++ // drop a track still being found
+	a.resolving = false
 	a.player.Stop()
 }
 
@@ -166,6 +181,9 @@ func (a *app) previous() {
 // togglePlay pauses a playing track, resumes a paused one, and starts the
 // current track again after it failed or ended.
 func (a *app) togglePlay() {
+	if a.resolving {
+		return // the track is already on its way
+	}
 	if a.playErr != "" || !a.player.Active() {
 		if a.current.VideoID != "" {
 			a.start(a.current)

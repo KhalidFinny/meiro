@@ -194,7 +194,15 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 	played := false
 	card.Children(func() {
 		radius := artRadius(item, m3.LargeIncreased)
+		opening := a.opening == itemKey("open", item)
 		m3.Art(c, a.thumbs.bitmap(item.Thumbnail, 360), cardArt, radius, func() {
+			if opening {
+				ui.Box(c).Size(40, 40).Radius(m3.Full).Center().Background(sc.PrimaryContainer).
+					Attach(ui.AnchorBottomRight, ui.AnchorBottomRight).Right(8).Bottom(8).Children(func() {
+					m3.LoadingIndicatorIn(c, 28, sc.OnPrimaryContainer)
+				})
+				return
+			}
 			if !hovered || (kind != pageTrack && kind != pageAlbum && kind != pagePlaylist) {
 				return
 			}
@@ -255,6 +263,8 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 		if o.number > 0 {
 			ui.Row(c).Size(48, 48).Shrink(0).Center().Children(func() {
 				switch {
+				case playing && a.loading():
+					m3.LoadingIndicatorIn(c, 24, sc.Primary)
 				case playing:
 					m3.Equalizer(c, 18, a.player.Playing(), sc.Primary)
 				case hovered && isSong:
@@ -269,7 +279,9 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 					return
 				}
 				ui.Box(c).Fill().Center().Background(sc.Scrim.Alpha(0.45)).Children(func() {
-					if playing {
+					if playing && a.loading() {
+						m3.LoadingIndicatorIn(c, 24, ui.RGB(255, 255, 255))
+					} else if playing {
 						m3.Equalizer(c, 18, a.player.Playing(), ui.RGB(255, 255, 255))
 					} else {
 						ui.Icon(c, m3.IconPlay).FontSize(24).TextColor(ui.RGB(255, 255, 255))

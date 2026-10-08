@@ -23,10 +23,22 @@ var morphs = []morph{{0, 0}, {3, 0.17}, {4, 0.11}, {6, 0.11}, {8, 0.09}, {5, 0.1
 // loads. Contained puts it in a tonal disc.
 func LoadingIndicator(c *ui.Context, size float32, contained bool) ui.Element {
 	sc := Active().Scheme
-	shape, disc := sc.Primary, ui.Transparent
 	if contained {
-		shape, disc = sc.OnPrimaryContainer, sc.PrimaryContainer
+		return loadingIndicator(c, size, sc.OnPrimaryContainer, sc.PrimaryContainer)
 	}
+	return loadingIndicator(c, size, sc.Primary, ui.Transparent)
+}
+
+// LoadingIndicatorIn is the loading indicator, without a disc, in colour
+// where the theme's primary would not show.
+func LoadingIndicatorIn(c *ui.Context, size float32, colour ui.Color) ui.Element {
+	return loadingIndicator(c, size, colour, ui.Transparent)
+}
+
+// loadingIndicator draws the morphing shape in shape, on a disc of colour
+// disc when that is not transparent.
+func loadingIndicator(c *ui.Context, size float32, shape, disc ui.Color) ui.Element {
+	contained := disc.A != 0
 	e := ui.Box(c).Size(size, size).Shrink(0).Label("Loading")
 	if contained {
 		e.Radius(Full).Background(disc)

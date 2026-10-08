@@ -199,7 +199,10 @@ type IconButtonSpec struct {
 	Morph        bool
 	SelectedIcon *ui.SVG
 	Disabled     bool
-	Key          any
+	// Loading swaps the icon for the loading indicator and ignores presses,
+	// while the button's action is under way.
+	Loading bool
+	Key     any
 	// Dimension sets the button's side in DIPs where none of the five sizes
 	// fits, as a play button in a player bar.
 	Dimension float32
@@ -270,7 +273,14 @@ func IconButton(c *ui.Context, spec IconButtonSpec) ui.Element {
 	if outline.A != 0 {
 		b.Border(1, outline)
 	}
+	if spec.Loading {
+		b.Disabled(true)
+	}
 	b.Children(func() {
+		if spec.Loading {
+			loadingIndicator(c, d.icon*1.4, content, ui.Transparent)
+			return
+		}
 		ui.Icon(c, icon).FontSize(d.icon).TextColor(content)
 	})
 	return b

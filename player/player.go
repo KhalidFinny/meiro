@@ -181,6 +181,23 @@ func (p *Player) Playing() bool {
 	return s != nil && !s.paused && !p.endedLocked(s)
 }
 
+// Buffering reports whether the stream is playing but has not yet given any
+// sound: ffmpeg is still opening it, or catching up after a seek.
+func (p *Player) Buffering() bool {
+	p.mu.Lock()
+	s := p.session
+	p.mu.Unlock()
+	if s == nil || s.paused || s.source.read.Load() > 0 {
+		return false
+	}
+	select {
+	case <-s.done:
+		return false // ffmpeg stopped without a sample; Failure says why
+	default:
+		return true
+	}
+}
+
 // Paused reports whether the stream is loaded and held.
 func (p *Player) Paused() bool {
 	p.mu.Lock()
