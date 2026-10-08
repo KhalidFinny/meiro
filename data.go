@@ -436,12 +436,42 @@ func (a *app) activate(item youtube.MusicItem, queue []youtube.MusicItem) {
 				break
 			}
 		}
-		a.play(item, queue, index)
+		options, source := a.playbackQueueOptions(index)
+		a.playWithOptions(item, queue, index, options, source)
 	case pageAlbum, pagePlaylist, pageArtist:
 		path := "/" + kind + "/" + url.PathEscape(id)
 		a.details[path] = detail{title: item.Title, subtitle: item.Subtitle, art: item.Thumbnail, kind: kind}
 		a.router.Push(path)
 	}
+}
+
+// playbackQueueOptions adds the playlist position when a track is selected
+// from a playlist page. The page title is shown as the queue's source.
+func (a *app) playbackQueueOptions(index int) (youtube.UpNextOptions, string) {
+	options := youtube.UpNextOptions{}
+	path := ""
+	if a.router != nil {
+		path = a.router.Path()
+	}
+	if strings.HasPrefix(path, "/playlist/") {
+		playlistIndex := index
+		options.PlaylistID = pathArg(path)
+		options.PlaylistIndex = &playlistIndex
+	}
+	source := a.detail.title
+	if source == "" {
+		switch path {
+		case "/home":
+			source = "Home"
+		case "/explore":
+			source = "Explore"
+		case "/library":
+			source = "Your library"
+		case "/search":
+			source = "Search results"
+		}
+	}
+	return options, source
 }
 
 // playCollection plays an album or a playlist from its first song, without
@@ -469,13 +499,16 @@ func (a *app) playCollection(item youtube.MusicItem) {
 		if kind == pageAlbum {
 			result, err = client.GetAlbum(ctx, id)
 		} else {
-			result, err = client.GetPlaylist(ctx, id)
+			result, err = client.GetAllPlaylist(ctx, id)
 		}
 		var songs []youtube.MusicItem
 		if err == nil {
 			all := result.Items
-			for _, section := range result.Sections {
-				all = append(all, section.Items...)
+			if len(result.Sections) > 0 {
+				all = nil
+				for _, section := range result.Sections {
+					all = append(all, section.Items...)
+				}
 			}
 			for _, song := range all {
 				if k, _ := targetOf(song); k == pageTrack {
@@ -491,7 +524,12 @@ func (a *app) playCollection(item youtube.MusicItem) {
 				a.opening = ""
 			}
 			if len(songs) > 0 {
-				a.play(songs[0], songs, 0)
+				options := youtube.UpNextOptions{}
+				if kind == pagePlaylist {
+					playlistIndex := 0
+					options.PlaylistID, options.PlaylistIndex = id, &playlistIndex
+				}
+				a.playWithOptions(songs[0], songs, 0, options, item.Title)
 			}
 		})
 	})

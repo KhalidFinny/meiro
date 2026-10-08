@@ -17,6 +17,12 @@ import (
 
 // play starts item, with the items around it as the queue.
 func (a *app) play(item youtube.MusicItem, queue []youtube.MusicItem, index int) {
+	a.playWithOptions(item, queue, index, youtube.UpNextOptions{}, "")
+}
+
+// playWithOptions starts an item and remembers the context used to ask
+// YouTube Music for the generated queue.
+func (a *app) playWithOptions(item youtube.MusicItem, queue []youtube.MusicItem, index int, options youtube.UpNextOptions, source string) {
 	if item.VideoID == "" {
 		return
 	}
@@ -36,10 +42,28 @@ func (a *app) play(item youtube.MusicItem, queue []youtube.MusicItem, index int)
 		}
 	}
 	a.index = index
+	options.VideoID = item.VideoID
+	a.resetUpNext(options, source)
 	if a.resolving && a.current.VideoID == item.VideoID {
+		a.ensureUpNext()
 		return // this track is already on its way
 	}
 	a.start(item)
+}
+
+// resetUpNext drops recommendations from the queue being replaced and
+// invalidates any request that belongs to the previous selection.
+func (a *app) resetUpNext(options youtube.UpNextOptions, source string) {
+	a.upNextGeneration++
+	a.upNextOptions = options
+	a.upNextLoading = false
+	a.upNextFetched = false
+	a.upNextErr = ""
+	a.upNextToken = ""
+	a.upNextSeen = make(map[string]struct{})
+	a.recommendationStart = -1
+	a.queueSource = source
+	a.waitingForAuto = false
 }
 
 // playAll plays everything on the page shown.
@@ -47,7 +71,8 @@ func (a *app) playAll() {
 	if len(a.playable) == 0 {
 		return
 	}
-	a.play(a.playable[0], a.playable, 0)
+	options, source := a.playbackQueueOptions(0)
+	a.playWithOptions(a.playable[0], a.playable, 0, options, source)
 }
 
 // start makes item the current track and resolves its audio.
@@ -57,6 +82,131 @@ func (a *app) start(item youtube.MusicItem) {
 	a.scrub, a.playErr = 0, ""
 	a.player.Stop()
 	a.stream(item)
+	a.ensureUpNext()
+}
+
+// ensureUpNext fetches the initial queue at once, then asks for another page
+// only when the generated part is almost exhausted.
+func (a *app) ensureUpNext() {
+	if !a.settings.AutoPlay || a.current.VideoID == "" || a.upNextLoading || len(a.queue) == 0 {
+		return
+	}
+	client := a.client()
+	if client == nil {
+		return
+	}
+	continuation := ""
+	if a.upNextFetched {
+		if a.upNextToken == "" || len(a.queue)-a.index > 2 {
+			return
+		}
+		continuation = a.upNextToken
+		if a.upNextSeen == nil {
+			a.upNextSeen = make(map[string]struct{})
+		}
+		if _, seen := a.upNextSeen[continuation]; seen {
+			a.upNextToken = ""
+			return
+		}
+		a.upNextSeen[continuation] = struct{}{}
+	} else {
+		a.upNextFetched = true
+	}
+	a.upNextLoading = true
+	generation := a.upNextGeneration
+	options := a.upNextOptions
+	a.run(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		var result *youtube.BrowseResult
+		var err error
+		if continuation == "" {
+			result, err = client.GetUpNextWithOptions(ctx, options)
+		} else {
+			result, err = client.ContinueUpNext(ctx, options, continuation)
+		}
+		defer reclaimMemory()
+		a.update(func() {
+			if generation != a.upNextGeneration {
+				return
+			}
+			a.upNextLoading = false
+			if err != nil {
+				a.upNextErr = err.Error()
+				a.upNextToken = ""
+				if a.waitingForAuto {
+					a.waitingForAuto = false
+					a.stopAtQueueEnd()
+				}
+				return
+			}
+			a.upNextErr = ""
+			if result.QueuePlaylistID != "" {
+				if a.upNextOptions.PlaylistID != "" && a.upNextOptions.PlaylistID != result.QueuePlaylistID {
+					a.upNextOptions.PlaylistIndex = nil
+				}
+				a.upNextOptions.PlaylistID = result.QueuePlaylistID
+			}
+			if result.ContinuationToken == continuation {
+				a.upNextToken = ""
+			} else {
+				a.upNextToken = result.ContinuationToken
+			}
+			a.appendRecommendations(result.Items)
+			if a.waitingForAuto {
+				if a.index+1 < len(a.queue) {
+					a.waitingForAuto = false
+					a.advance()
+				} else {
+					a.ensureUpNext()
+				}
+			}
+		})
+	})
+}
+
+// appendRecommendations keeps the selected queue intact and appends only
+// tracks YouTube Music has not already returned in it.
+func (a *app) appendRecommendations(items []youtube.MusicItem) {
+	seen := make(map[string]struct{}, len(a.queue)+len(items))
+	for _, queued := range a.queue {
+		if queued.VideoID != "" {
+			seen[queued.VideoID] = struct{}{}
+		}
+	}
+	for _, item := range items {
+		if item.VideoID == "" {
+			continue
+		}
+		if _, exists := seen[item.VideoID]; exists {
+			continue
+		}
+		seen[item.VideoID] = struct{}{}
+		if a.recommendationStart < 0 {
+			a.recommendationStart = len(a.queue)
+		}
+		a.queue = append(a.queue, item)
+	}
+}
+
+// setAutoPlay changes whether generated tracks can follow the selected queue.
+func (a *app) setAutoPlay(enabled bool) {
+	if a.settings.AutoPlay == enabled {
+		return
+	}
+	a.settings.AutoPlay = enabled
+	a.saveSettings()
+	a.upNextGeneration++
+	a.upNextLoading = false
+	a.upNextErr = ""
+	a.waitingForAuto = false
+	if enabled {
+		a.upNextFetched = false
+		a.upNextToken = ""
+		a.upNextSeen = make(map[string]struct{})
+		a.upNextOptions.VideoID = a.current.VideoID
+		a.ensureUpNext()
+	}
 }
 
 // loading reports whether the track chosen is not making sound yet: its audio
@@ -175,13 +325,26 @@ func parseDuration(text string) time.Duration {
 	return total
 }
 
-// advance plays the next track of the queue, and stops at the end of it.
+// advance plays the next track of the queue, waiting for recommendations at
+// its end when autoplay is on.
 func (a *app) advance() {
 	if next, ok := a.nextIndex(); ok {
 		a.index = next
 		a.start(a.queue[a.index])
 		return
 	}
+	if a.settings.AutoPlay && (a.upNextLoading || !a.upNextFetched || a.upNextToken != "") {
+		a.waitingForAuto = true
+		a.player.Stop()
+		a.ensureUpNext()
+		return
+	}
+	a.stopAtQueueEnd()
+}
+
+// stopAtQueueEnd stops playback and invalidates a stream lookup that may still
+// be outstanding.
+func (a *app) stopAtQueueEnd() {
 	a.streamGen++ // drop a track still being found
 	a.resolving = false
 	a.player.Stop()
@@ -234,7 +397,8 @@ func (a *app) shufflePage() {
 	}
 	a.shuffle = true
 	i := rand.IntN(len(a.playable))
-	a.play(a.playable[i], a.playable, i)
+	options, source := a.playbackQueueOptions(i)
+	a.playWithOptions(a.playable[i], a.playable, i, options, source)
 }
 
 // setVolume sets the volume, from 0 to 100, and keeps it for the next run.
@@ -291,6 +455,35 @@ func (a *app) loadLyrics() {
 			a.lyrics.text, a.lyrics.footer = strings.TrimSpace(lyrics.Description), lyrics.Footer
 			if a.lyrics.text == "" {
 				a.lyrics.err = "No lyrics for this song."
+			}
+		})
+	})
+}
+
+// loadRelated fetches related songs for the track playing, once per track.
+func (a *app) loadRelated() {
+	id := a.current.VideoID
+	client := a.client()
+	if id == "" || a.related.videoID == id || client == nil {
+		return
+	}
+	a.related = relatedState{videoID: id, loading: true}
+	a.run(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		result, err := client.GetRelated(ctx, id)
+		a.update(func() {
+			if a.related.videoID != id {
+				return
+			}
+			a.related.loading = false
+			if err != nil {
+				a.related.err = "Related songs aren't available."
+				return
+			}
+			a.related.items = result.Items
+			if len(result.Items) == 0 {
+				a.related.err = "No related songs for this track."
 			}
 		})
 	})

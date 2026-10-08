@@ -93,19 +93,33 @@ type app struct {
 	queueFollow string
 	volumeHeld  bool
 	lyrics      lyricsState
+	related     relatedState
+	relatedList ui.ListState
 
 	// Playback.
-	current   youtube.MusicItem
-	queue     []youtube.MusicItem
-	index     int
-	total     time.Duration
-	scrub     float64
-	scrubbing bool
-	volume    float64
-	muted     float64 // the volume to return to, while muted
-	shuffle   bool
-	repeat    repeatMode
-	playErr   string
+	current youtube.MusicItem
+	queue   []youtube.MusicItem
+	index   int
+	// recommendationStart marks the first generated track in queue; tracks
+	// before it came from the user's selected page or playlist.
+	recommendationStart int
+	queueSource         string
+	upNextOptions       youtube.UpNextOptions
+	upNextGeneration    int
+	upNextLoading       bool
+	upNextFetched       bool
+	upNextErr           string
+	upNextToken         string
+	upNextSeen          map[string]struct{}
+	waitingForAuto      bool
+	total               time.Duration
+	scrub               float64
+	scrubbing           bool
+	volume              float64
+	muted               float64 // the volume to return to, while muted
+	shuffle             bool
+	repeat              repeatMode
+	playErr             string
 	// resolving is set from the moment a track is chosen until its audio URL
 	// is found, and streamGen numbers those requests, so that only the latest
 	// one plays when it lands.
@@ -138,18 +152,27 @@ type detail struct {
 	kind     string
 }
 
+// relatedState is the related songs tab for the track playing.
+type relatedState struct {
+	videoID string
+	loading bool
+	items   []youtube.MusicItem
+	err     string
+}
+
 func newApp() *app {
 	var playerOptions []player.Option
 	if ffmpeg, err := toolPath("ffmpeg"); err == nil {
 		playerOptions = append(playerOptions, player.WithFFmpeg(ffmpeg))
 	}
 	a := &app{
-		router:    ui.NewRouter("/home"),
-		player:    player.New(playerOptions...),
-		settings:  defaultSettings(),
-		search:    searchState{},
-		details:   make(map[string]detail),
-		carousels: make(map[string]*m3.CarouselState),
+		router:              ui.NewRouter("/home"),
+		player:              player.New(playerOptions...),
+		settings:            defaultSettings(),
+		search:              searchState{},
+		details:             make(map[string]detail),
+		carousels:           make(map[string]*m3.CarouselState),
+		recommendationStart: -1,
 	}
 	a.volume = a.settings.Volume
 	a.run = func(work func()) { go work() }
@@ -312,6 +335,7 @@ func (a *app) tick(c *ui.Context) {
 		return
 	}
 	if a.player.Playing() {
+		a.ensureUpNext()
 		if !a.scrubbing {
 			a.scrub = a.player.Position().Seconds()
 		}
@@ -332,18 +356,22 @@ func (a *app) trackEnded() {
 // nextIndex returns the place of the track that follows the current one in
 // the queue, and false when the queue is over.
 func (a *app) nextIndex() (int, bool) {
+	limit := len(a.queue)
+	if !a.settings.AutoPlay && a.recommendationStart >= 0 {
+		limit = a.recommendationStart
+	}
 	switch {
-	case len(a.queue) == 0:
+	case limit == 0 || (!a.settings.AutoPlay && a.recommendationStart >= 0 && a.index >= limit):
 		return 0, false
-	case a.shuffle && len(a.queue) > 1:
+	case a.shuffle && limit > 1:
 		// Any track but the current one: draw from the others, and step over
 		// the current one's place.
-		i := rand.IntN(len(a.queue) - 1)
+		i := rand.IntN(limit - 1)
 		if i >= a.index && a.index >= 0 {
 			i++
 		}
 		return i, true
-	case a.index+1 < len(a.queue):
+	case a.index+1 < limit:
 		return a.index + 1, true
 	case a.repeat == repeatQueue:
 		return 0, true

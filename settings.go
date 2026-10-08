@@ -31,12 +31,14 @@ type settings struct {
 	RailExpanded bool `json:"railExpanded"`
 	// Volume is the player's, from 0 to 100.
 	Volume float64 `json:"volume"`
+	// AutoPlay adds YouTube Music's generated queue after the selected tracks.
+	AutoPlay bool `json:"autoPlay"`
 	// Recent holds the searches submitted, newest first.
 	Recent []string `json:"recent,omitempty"`
 }
 
 func defaultSettings() settings {
-	return settings{Seed: "#6750a4", Mode: "system", Volume: 70}
+	return settings{Seed: "#6750a4", Mode: "system", Volume: 70, AutoPlay: true}
 }
 
 // clone returns a copy that shares no memory with s, for work that outlives
@@ -118,7 +120,9 @@ func loadSettings(path string) settings {
 		}
 		return s
 	}
-	var read settings
+	// Start from defaults so settings added later get their default when an
+	// older settings file does not contain the new field yet.
+	read := s
 	if err := json.Unmarshal(data, &read); err != nil {
 		// The next save replaces the file, so say what was lost.
 		log.Printf("settings in %s are not readable, starting from the defaults: %v", path, err)

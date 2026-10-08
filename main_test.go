@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -285,7 +287,7 @@ func TestSettingsChangeTheTheme(t *testing.T) {
 func TestSettingsPersist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "settings.json")
 	s := defaultSettings()
-	s.Seed, s.Mode, s.Style, s.Dynamic = "#00897b", "dark", int(m3.Expressive), true
+	s.Seed, s.Mode, s.Style, s.Dynamic, s.AutoPlay = "#00897b", "dark", int(m3.Expressive), true, false
 	s.remember("one")
 	s.remember("two")
 	s.remember("One")
@@ -293,7 +295,7 @@ func TestSettingsPersist(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := loadSettings(path)
-	if got.Seed != s.Seed || got.Mode != "dark" || got.Style != int(m3.Expressive) || !got.Dynamic {
+	if got.Seed != s.Seed || got.Mode != "dark" || got.Style != int(m3.Expressive) || !got.Dynamic || got.AutoPlay {
 		t.Errorf("settings came back as %+v", got)
 	}
 	if len(got.Recent) != 2 || got.Recent[0] != "One" {
@@ -311,6 +313,16 @@ func TestSettingsPersist(t *testing.T) {
 	}
 	if bad := loadSettings(path); bad.Seed != defaultSettings().Seed {
 		t.Errorf("a broken file gave %+v", bad)
+	}
+}
+
+func TestOlderSettingsDefaultAutoplayToOn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"seed":"#6750a4","mode":"system","volume":70}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadSettings(path); !got.AutoPlay {
+		t.Errorf("older settings disabled autoplay: %+v", got)
 	}
 }
 
@@ -597,6 +609,106 @@ func TestQueueSurvivesTheNextPageOfRows(t *testing.T) {
 	a.setRows()
 	if got := a.queue[0].VideoID + a.queue[1].VideoID + a.queue[2].VideoID; got != "ABC" {
 		t.Errorf("the queue became %q after the next page was drawn", got)
+	}
+}
+
+func TestAutoplayAppendsAndContinuesWithoutDuplicatingTheSelectedQueue(t *testing.T) {
+	var nextRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/youtubei/v1/next" {
+			t.Errorf("request path = %q, want /next", r.URL.Path)
+		}
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		switch nextRequests.Add(1) {
+		case 1:
+			if request["videoId"] != "seed" || request["playlistId"] != "PL123" || request["playlistIndex"] != float64(1) {
+				t.Errorf("initial up-next request = %#v", request)
+			}
+			_, _ = w.Write([]byte(`{"contents":{"playlistPanelRenderer":{"playlistId":"RDAMVMseed","contents":[{"playlistPanelVideoRenderer":{"videoId":"playlist-next","title":{"simpleText":"Playlist next"}}},{"playlistPanelVideoRenderer":{"videoId":"radio-1","title":{"simpleText":"Radio one"}}}],"continuations":[{"nextRadioContinuationData":{"continuation":"RADIO_MORE"}}]}}}`))
+		case 2:
+			if request["videoId"] != "seed" || request["playlistId"] != "RDAMVMseed" || request["playlistIndex"] != nil || request["continuation"] != "RADIO_MORE" {
+				t.Errorf("radio continuation request = %#v", request)
+			}
+			_, _ = w.Write([]byte(`{"continuationContents":{"playlistPanelContinuation":{"playlistId":"RDAMVMseed","contents":[{"playlistPanelVideoRenderer":{"videoId":"radio-1","title":{"simpleText":"Radio one"}}},{"playlistPanelVideoRenderer":{"videoId":"radio-2","title":{"simpleText":"Radio two"}}}],"continuations":[{"nextRadioContinuationData":{"continuation":"RADIO_END"}}]}}}`))
+		default:
+			t.Errorf("unexpected /next request #%d", nextRequests.Load())
+		}
+	}))
+	defer server.Close()
+	client := youtube.NewClient(youtube.Options{BaseURL: server.URL, APIKey: "test"})
+	a := newTestApp()
+	a.public, a.authed = client, client
+	a.run = func(work func()) { work() }
+	index := 1
+	a.current = youtube.MusicItem{VideoID: "seed", Title: "Seed"}
+	a.queue = []youtube.MusicItem{{VideoID: "seed"}, {VideoID: "playlist-next"}}
+	a.index = 0
+	a.resetUpNext(youtube.UpNextOptions{VideoID: "seed", PlaylistID: "PL123", PlaylistIndex: &index}, "Playlist")
+
+	a.ensureUpNext()
+	if len(a.queue) != 3 || a.recommendationStart != 2 || a.queue[2].VideoID != "radio-1" || a.upNextToken != "RADIO_MORE" {
+		t.Fatalf("initial up-next queue = %#v, recommendation start %d, token %q", a.queue, a.recommendationStart, a.upNextToken)
+	}
+	if a.queueSource != "Playlist" || a.upNextOptions.PlaylistID != "RDAMVMseed" || a.upNextOptions.PlaylistIndex != nil {
+		t.Errorf("resolved queue context = source %q, options %+v", a.queueSource, a.upNextOptions)
+	}
+
+	a.index = 1 // two tracks remain, so prefetch the radio continuation.
+	a.ensureUpNext()
+	if len(a.queue) != 4 || a.queue[3].VideoID != "radio-2" || a.upNextToken != "RADIO_END" || nextRequests.Load() != 2 {
+		t.Fatalf("continued queue = %#v with token %q after %d requests", a.queue, a.upNextToken, nextRequests.Load())
+	}
+	a.setAutoPlay(false)
+	if _, ok := a.nextIndex(); ok {
+		t.Errorf("autoplay-off advanced into generated recommendations")
+	}
+}
+
+func TestQueueEndWaitsForInFlightRecommendation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"contents":{"playlistPanelRenderer":{"contents":[{"playlistPanelVideoRenderer":{"videoId":"radio-1","title":{"simpleText":"Radio one"}}}]}}}`))
+	}))
+	defer server.Close()
+	client := youtube.NewClient(youtube.Options{BaseURL: server.URL, APIKey: "test"})
+	a := newTestApp()
+	a.public, a.authed = client, client
+	var pending func()
+	a.run = func(work func()) { pending = work }
+	current := youtube.MusicItem{VideoID: "seed", Title: "Seed"}
+	a.current, a.queue = current, []youtube.MusicItem{current}
+	a.resetUpNext(youtube.UpNextOptions{VideoID: current.VideoID}, "")
+	a.ensureUpNext()
+	if pending == nil || !a.upNextLoading {
+		t.Fatal("the initial recommendation request did not start")
+	}
+	a.advance()
+	if !a.waitingForAuto {
+		t.Fatal("playback did not wait for the in-flight recommendation request")
+	}
+	pending()
+	if a.current.VideoID != "radio-1" || a.index != 1 || a.waitingForAuto {
+		t.Errorf("queue end left current=%q, index=%d, waiting=%v", a.current.VideoID, a.index, a.waitingForAuto)
+	}
+}
+
+func TestUpNextFailureKeepsTheSelectedQueue(t *testing.T) {
+	client := youtube.NewClient(youtube.Options{
+		APIKey:     "test",
+		HTTPClient: &http.Client{Transport: failingMusic{}},
+	})
+	a := newTestApp()
+	a.public, a.authed = client, client
+	a.run = func(work func()) { work() }
+	a.current = youtube.MusicItem{VideoID: "seed", Title: "Seed"}
+	a.queue = []youtube.MusicItem{{VideoID: "seed"}, {VideoID: "chosen", Title: "Chosen next"}}
+	a.resetUpNext(youtube.UpNextOptions{VideoID: "seed"}, "")
+	a.ensureUpNext()
+	if len(a.queue) != 2 || a.queue[1].VideoID != "chosen" || a.upNextErr == "" || a.playErr != "" {
+		t.Errorf("failed recommendation request changed playback state: queue=%#v error=%q play error=%q", a.queue, a.upNextErr, a.playErr)
 	}
 }
 
