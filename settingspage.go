@@ -130,7 +130,11 @@ func (a *app) swatch(c *ui.Context, name, hex string) bool {
 	}
 	selected := !a.settings.Dynamic && hex == a.settings.Seed
 	b := ui.ButtonBase(c.Key("swatch-" + hex))
-	radius := m3.Animate(b, "r", map[bool]float32{false: 28, true: 16}[selected], m3.SpatialFast)
+	rest := float32(28)
+	if selected {
+		rest = 16
+	}
+	radius := m3.Animate(b, "r", rest, m3.SpatialFast)
 	if b.Pressed() {
 		radius = 12
 	}

@@ -721,3 +721,36 @@ func TestCookieHeaderSurvivesNonASCIIText(t *testing.T) {
 		t.Errorf("cookieHeader = %q", got)
 	}
 }
+
+func TestShuffleOfTwoTracksAlwaysPicksTheOther(t *testing.T) {
+	a := newTestApp()
+	a.shuffle = true
+	a.queue = []youtube.MusicItem{{VideoID: "a"}, {VideoID: "b"}}
+	for _, index := range []int{0, 1} {
+		a.index = index
+		for range 50 {
+			if i, ok := a.nextIndex(); !ok || i != 1-index {
+				t.Fatalf("from %d, shuffle chose %d, %v", index, i, ok)
+			}
+		}
+	}
+	// A stale index past the end still yields a track in the queue.
+	a.index = 7
+	for range 50 {
+		if i, ok := a.nextIndex(); !ok || i < 0 || i >= len(a.queue) {
+			t.Fatalf("from a stale index, shuffle chose %d, %v", i, ok)
+		}
+	}
+}
+
+func TestRepeatCyclesThroughItsModes(t *testing.T) {
+	a := newTestApp()
+	var seen []repeatMode
+	for range 4 {
+		a.cycleRepeat()
+		seen = append(seen, a.repeat)
+	}
+	if want := []repeatMode{repeatQueue, repeatTrack, repeatOff, repeatQueue}; !slices.Equal(seen, want) {
+		t.Errorf("repeat went %v, want %v", seen, want)
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -49,10 +50,10 @@ func (a *app) transport(c *ui.Context, size float32, gap float32) {
 		}
 		spec = small
 		repeatIcon := m3.IconRepeat
-		if a.repeat == 2 {
+		if a.repeat == repeatTrack {
 			repeatIcon = m3.IconRepeatOne
 		}
-		spec.Icon, spec.Label, spec.Toggle, spec.Selected, spec.Key = repeatIcon, "Repeat", true, a.repeat > 0, "repeat"
+		spec.Icon, spec.Label, spec.Toggle, spec.Selected, spec.Key = repeatIcon, "Repeat", true, a.repeat != repeatOff, "repeat"
 		if m3.IconButton(c, spec).Clicked() {
 			a.cycleRepeat()
 		}
@@ -275,8 +276,20 @@ func (a *app) queueView(c *ui.Context) {
 		a.message(c, m3.IconQueue, "The queue is empty", "", "", nil)
 		return
 	}
-	a.queueList.Key = func(i int) any { return itemKey("queue", a.queue[i]) + string(rune(i)) }
-	a.queueList.Label = func(i int) string { return a.queue[i].Title }
+	// A press in a row can replace the queue while the list still asks about
+	// a row of the one before.
+	a.queueList.Key = func(i int) any {
+		if i >= len(a.queue) {
+			return nil
+		}
+		return itemKey("queue", a.queue[i]) + "#" + strconv.Itoa(i)
+	}
+	a.queueList.Label = func(i int) string {
+		if i >= len(a.queue) {
+			return ""
+		}
+		return a.queue[i].Title
+	}
 	if a.queueFollow != a.current.VideoID {
 		a.queueFollow = a.current.VideoID
 		a.queueList.ScrollTo(a.index, ui.Start)

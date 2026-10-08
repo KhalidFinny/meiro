@@ -53,9 +53,8 @@ func (a *app) pageList(c *ui.Context) {
 		}
 		if r := a.rows[i]; r.kind == rowTrack {
 			return r.item.Title
-		} else {
-			return r.title
 		}
+		return a.rows[i].title
 	}
 	ui.List(c, &a.list, len(a.rows), func(i int) {
 		a.rowView(c, i)
@@ -172,6 +171,14 @@ func itemKey(prefix string, item youtube.MusicItem) string {
 	return prefix + ":" + item.ID + "\x00" + item.Title + "\x00" + item.Subtitle
 }
 
+// hoverOpacity is the state layer of something that may be under the pointer.
+func hoverOpacity(hovered bool) float32 {
+	if hovered {
+		return m3.StateHover
+	}
+	return 0
+}
+
 // artRadius is the corner of an item's artwork: artists are round, the rest
 // are soft squares.
 func artRadius(item youtube.MusicItem, square float32) float32 {
@@ -189,7 +196,7 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 	card := ui.ButtonBase(c.Key(itemKey("card", item)))
 	hovered := card.Hovered()
 	card.Column().AlignItems(ui.Start).Width(cardWidth).Shrink(0).Padding(8).Gap(10).Radius(m3.ExtraLarge).Cursor(ui.CursorPointer).
-		Background(m3.Layer(sc.Surface, sc.OnSurface, map[bool]float32{false: 0, true: m3.StateHover}[hovered || card.FocusVisible()])).
+		Background(m3.Layer(sc.Surface, sc.OnSurface, hoverOpacity(hovered || card.FocusVisible()))).
 		Label(item.Title)
 	played := false
 	card.Children(func() {

@@ -99,14 +99,24 @@ func (a *app) stream(item youtube.MusicItem) {
 // package first, and falls back to yt-dlp, which keeps working when
 // YouTube's player script has moved past what the package can decipher.
 func resolveStream(ctx context.Context, client *youtube.Client, item youtube.MusicItem) (string, time.Duration, error) {
+	var direct error
 	if client != nil {
-		if info, err := client.GetTrackInfo(ctx, item.VideoID); err == nil {
+		info, err := client.GetTrackInfo(ctx, item.VideoID)
+		if err == nil {
 			if format, ok := info.BestAudioFormat(); ok {
 				return format.PlayableURL(), parseDuration(info.VideoDetails.Length), nil
 			}
+			err = errors.New("no audio format could be read")
 		}
+		direct = fmt.Errorf("asking YouTube: %w", err)
 	}
-	return ytDlpStream(ctx, item.VideoID)
+	streamURL, total, err := ytDlpStream(ctx, item.VideoID)
+	if err != nil {
+		// What yt-dlp said comes first, as the message shows only a line of it;
+		// what YouTube said is what to look at when yt-dlp is not there.
+		return "", 0, errors.Join(err, direct)
+	}
+	return streamURL, total, nil
 }
 
 // ytDlpStream asks yt-dlp for a direct audio URL.
@@ -117,10 +127,15 @@ func ytDlpStream(ctx context.Context, videoID string) (string, time.Duration, er
 	}
 	command := exec.CommandContext(ctx, path,
 		"-f", "bestaudio", "-g", "--no-playlist", "--no-warnings",
-		"https://music.youtube.com/watch?v="+videoID)
+		"https://music.youtube.com/watch?v="+url.QueryEscape(videoID))
 	output, err := command.Output()
 	if err != nil {
-		return "", 0, fmt.Errorf("could not resolve the audio: %w", err)
+		if exit := (*exec.ExitError)(nil); errors.As(err, &exit) {
+			if reason := lastError(string(exit.Stderr)); reason != "" {
+				return "", 0, fmt.Errorf("yt-dlp could not resolve the audio: %s", reason)
+			}
+		}
+		return "", 0, fmt.Errorf("yt-dlp could not resolve the audio: %w", err)
 	}
 	streamURL, _, _ := strings.Cut(string(output), "\n")
 	streamURL = strings.TrimSpace(streamURL)
@@ -241,7 +256,7 @@ func (a *app) toggleMute() {
 
 // cycleRepeat goes from not repeating to repeating the queue to repeating the
 // track and back.
-func (a *app) cycleRepeat() { a.repeat = (a.repeat + 1) % 3 }
+func (a *app) cycleRepeat() { a.repeat = (a.repeat + 1) % (repeatTrack + 1) }
 
 // lyricsState is the lyrics of the track playing, as far as they are loaded.
 type lyricsState struct {

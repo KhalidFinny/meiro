@@ -104,7 +104,7 @@ type app struct {
 	volume    float64
 	muted     float64 // the volume to return to, while muted
 	shuffle   bool
-	repeat    int // 0 off, 1 the queue, 2 the track
+	repeat    repeatMode
 	playErr   string
 	// resolving is set from the moment a track is chosen until its audio URL
 	// is found, and streamGen numbers those requests, so that only the latest
@@ -120,6 +120,15 @@ type app struct {
 	job    int
 	cancel context.CancelFunc
 }
+
+// repeatMode is what happens when a track, or the queue, ends.
+type repeatMode int
+
+const (
+	repeatOff   repeatMode = iota // play on, and stop at the end of the queue
+	repeatQueue                   // go back to the first track after the last
+	repeatTrack                   // play the same track again
+)
 
 // detail remembers what the page being opened is, for its heading.
 type detail struct {
@@ -313,7 +322,7 @@ func (a *app) tick(c *ui.Context) {
 // trackEnded moves on when a track finishes: it repeats, or plays the next
 // one, or stops at the end of the queue.
 func (a *app) trackEnded() {
-	if a.repeat == 2 {
+	if a.repeat == repeatTrack {
 		a.start(a.current)
 		return
 	}
@@ -327,14 +336,16 @@ func (a *app) nextIndex() (int, bool) {
 	case len(a.queue) == 0:
 		return 0, false
 	case a.shuffle && len(a.queue) > 1:
-		for {
-			if i := rand.IntN(len(a.queue)); i != a.index {
-				return i, true
-			}
+		// Any track but the current one: draw from the others, and step over
+		// the current one's place.
+		i := rand.IntN(len(a.queue) - 1)
+		if i >= a.index && a.index >= 0 {
+			i++
 		}
+		return i, true
 	case a.index+1 < len(a.queue):
 		return a.index + 1, true
-	case a.repeat == 1:
+	case a.repeat == repeatQueue:
 		return 0, true
 	}
 	return 0, false
