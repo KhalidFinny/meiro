@@ -206,6 +206,7 @@ func (a *app) finishSignIn(ctx context.Context, cookie string, attempt uint64) {
 		}
 		a.accountGen++
 		a.authed, a.signedIn, a.account = client, true, *details
+		a.ytDlpCookie = cookie
 		a.signIn = signInState{}
 		a.onSignedIn()
 	})
@@ -256,6 +257,7 @@ func (a *app) restoreAccount() {
 				return // the user signed in or out while the cookie was being read
 			}
 			a.authed, a.signedIn, a.account = client, true, *details
+			a.ytDlpCookie = cookie
 			a.signIn.err = ""
 			a.onSignedIn()
 		})
@@ -268,6 +270,7 @@ func (a *app) reportRestoreError(gen int, err error) {
 			return // the user signed in or out while the cookie was being read
 		}
 		a.authed, a.signedIn, a.account = nil, false, youtube.AccountDetails{}
+		a.ytDlpCookie = ""
 		a.signIn.err = "Could not restore your YouTube Music session: " + err.Error()
 		a.notice = a.signIn.err
 	})
@@ -282,6 +285,7 @@ func (a *app) signOut() {
 	}
 	a.signIn = signInState{}
 	a.authed, a.signedIn, a.account = nil, false, youtube.AccountDetails{}
+	a.ytDlpCookie = ""
 	a.onSignedIn()
 	if a.store == nil {
 		return

@@ -51,13 +51,18 @@ type audioCache struct {
 	mu       sync.Mutex
 	dir      string
 	limit    int
-	queue    []string
+	queue    []audioCacheDownload
 	pending  map[string]struct{}
 	running  bool
 	closed   bool
 	cancel   context.CancelFunc
 	worker   sync.WaitGroup
-	download func(context.Context, string, string) (string, error)
+	download func(context.Context, string, string, string) (string, error)
+}
+
+type audioCacheDownload struct {
+	videoID string
+	cookie  string
 }
 
 // newAudioCache prepares a private directory and removes any files over the
@@ -129,7 +134,7 @@ func (c *audioCache) get(videoID string) (string, bool) {
 
 // enqueue downloads videoID in the background unless it is already cached or
 // queued. One worker keeps disk use within the configured item limit.
-func (c *audioCache) enqueue(videoID string) {
+func (c *audioCache) enqueue(videoID, cookie string) {
 	if c == nil || videoID == "" {
 		return
 	}
@@ -142,7 +147,7 @@ func (c *audioCache) enqueue(videoID string) {
 		return
 	}
 	c.pending[videoID] = struct{}{}
-	c.queue = append(c.queue, videoID)
+	c.queue = append(c.queue, audioCacheDownload{videoID: videoID, cookie: cookie})
 	if c.running {
 		return
 	}
@@ -179,7 +184,8 @@ func (c *audioCache) drain() {
 			c.mu.Unlock()
 			return
 		}
-		videoID := c.queue[0]
+		download := c.queue[0]
+		c.queue[0] = audioCacheDownload{}
 		c.queue = c.queue[1:]
 		limit := c.limit
 		var ctx context.Context
@@ -191,17 +197,17 @@ func (c *audioCache) drain() {
 		c.mu.Unlock()
 
 		if limit > 0 {
-			temp, err := c.download(ctx, videoID, c.dir)
+			temp, err := c.download(ctx, download.videoID, c.dir, download.cookie)
 			cancelled := ctx.Err() != nil
 			cancel()
 			c.mu.Lock()
 			c.cancel = nil
 			if err == nil && c.limit > 0 {
-				if installErr := c.installLocked(videoID, temp); installErr != nil {
-					log.Printf("caching audio: %v", installErr)
+				if installErr := c.installLocked(download.videoID, temp); installErr != nil {
+					log.Printf("caching audio video_id=%s: %v", download.videoID, installErr)
 				}
 			} else if err != nil && !cancelled {
-				log.Printf("caching audio: %v", err)
+				log.Printf("caching audio video_id=%s: %v", download.videoID, err)
 			}
 			c.mu.Unlock()
 			if temp != "" {
@@ -210,7 +216,7 @@ func (c *audioCache) drain() {
 		}
 
 		c.mu.Lock()
-		delete(c.pending, videoID)
+		delete(c.pending, download.videoID)
 		c.mu.Unlock()
 	}
 }
@@ -334,7 +340,7 @@ func audioCacheExtension(ext string) bool {
 
 // downloadAudio asks yt-dlp to save a song into a temporary directory inside
 // the cache. The caller atomically installs it after the download succeeds.
-func downloadAudio(ctx context.Context, videoID, cacheDir string) (string, error) {
+func downloadAudio(ctx context.Context, videoID, cacheDir, cookie string) (string, error) {
 	path, err := toolPath("yt-dlp")
 	if err != nil {
 		return "", errors.New("yt-dlp is not installed or not on PATH")
@@ -343,7 +349,19 @@ func downloadAudio(ctx context.Context, videoID, cacheDir string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("prepare audio cache: %w", err)
 	}
-	command := exec.CommandContext(ctx, path, audioCacheDownloadArgs(videoID, tempDir)...)
+	_, runtimeArgs := ytDlpJSRuntimeArgs()
+	options := runtimeArgs
+	if cookie != "" {
+		cookieFile, err := ytDlpCookieFile(cookie)
+		if err != nil {
+			_ = os.RemoveAll(tempDir)
+			return "", fmt.Errorf("prepare yt-dlp authentication: %w", err)
+		}
+		defer os.Remove(cookieFile)
+		options = append(options, "--cookies", cookieFile)
+	}
+	args := audioCacheDownloadArgs(videoID, tempDir, options...)
+	command := exec.CommandContext(ctx, path, args...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		_ = os.RemoveAll(tempDir)
@@ -367,11 +385,12 @@ func downloadAudio(ctx context.Context, videoID, cacheDir string) (string, error
 	return "", errors.New("yt-dlp finished without an audio file")
 }
 
-func audioCacheDownloadArgs(videoID, tempDir string) []string {
-	return []string{
+func audioCacheDownloadArgs(videoID, tempDir string, options ...string) []string {
+	args := []string{
 		"-f", "bestaudio", "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0", "--embed-metadata",
 		"--no-playlist", "--no-warnings", "--no-progress",
 		"-o", filepath.Join(tempDir, "audio.%(ext)s"),
-		"https://music.youtube.com/watch?v=" + url.QueryEscape(videoID),
 	}
+	args = append(args, options...)
+	return append(args, "https://music.youtube.com/watch?v="+url.QueryEscape(videoID))
 }

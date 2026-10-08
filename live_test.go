@@ -23,7 +23,7 @@ func TestLivePlayback(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	streamURL, total, err := resolveStream(ctx, a.public, item)
+	streamURL, total, err := resolveStream(ctx, a.public, item, a.ytDlpCookie)
 	if err != nil {
 		t.Fatalf("resolveStream: %v", err)
 	}

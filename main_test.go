@@ -1081,9 +1081,10 @@ func TestSignOutSaysWhenTheSessionStays(t *testing.T) {
 	a := newTestApp()
 	a.store = &memoryStore{cookie: "SAPISID=abc", deleteErr: errors.New("the keychain is locked")}
 	a.signedIn = true
+	a.ytDlpCookie = "SAPISID=abc"
 	a.signOut()
-	if a.signedIn {
-		t.Error("the user is still signed in")
+	if a.signedIn || a.ytDlpCookie != "" {
+		t.Errorf("sign-out retained authentication: signedIn=%v yt-dlp cookie present=%v", a.signedIn, a.ytDlpCookie != "")
 	}
 	if !strings.Contains(a.notice, "keychain is locked") {
 		t.Errorf("the failure was not reported: %q", a.notice)

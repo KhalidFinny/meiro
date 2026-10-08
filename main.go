@@ -46,6 +46,9 @@ type app struct {
 	// restarts.
 	public *youtube.Client
 	authed *youtube.Client
+	// ytDlpCookie is the signed-in session used if the external extractor
+	// needs the same authentication as the InnerTube client.
+	ytDlpCookie string
 	// newClient makes the client that carries an account's cookie; tests
 	// replace it with one that needs no network.
 	newClient func(*youtube.CookieAuth) *youtube.Client

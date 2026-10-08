@@ -10,9 +10,13 @@ import (
 )
 
 func TestAudioCacheDownloadsMP3(t *testing.T) {
-	args := strings.Join(audioCacheDownloadArgs("video-id", t.TempDir()), " ")
-	if !strings.Contains(args, "-f bestaudio --extract-audio --audio-format mp3 --audio-quality 0 --embed-metadata") {
-		t.Errorf("yt-dlp options do not request tagged, best-quality MP3 audio: %s", args)
+	args := audioCacheDownloadArgs("video-id", t.TempDir(), "--cookies", "cookies.txt")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-f bestaudio --extract-audio --audio-format mp3 --audio-quality 0 --embed-metadata") {
+		t.Errorf("yt-dlp options do not request tagged, best-quality MP3 audio: %s", joined)
+	}
+	if got := args[len(args)-1]; got != "https://music.youtube.com/watch?v=video-id" {
+		t.Errorf("yt-dlp URL = %q, want it after all options", got)
 	}
 }
 
@@ -154,7 +158,9 @@ func TestAudioCacheEnqueueDownloadsOnceInBackground(t *testing.T) {
 		t.Fatal(err)
 	}
 	started, release := make(chan struct{}), make(chan struct{})
-	cache.download = func(_ context.Context, id, dir string) (string, error) {
+	cookieSeen := make(chan string, 1)
+	cache.download = func(_ context.Context, id, dir, cookie string) (string, error) {
+		cookieSeen <- cookie
 		close(started)
 		<-release
 		tempDir, err := os.MkdirTemp(dir, ".test-audio-")
@@ -167,10 +173,14 @@ func TestAudioCacheEnqueueDownloadsOnceInBackground(t *testing.T) {
 		}
 		return path, nil
 	}
-	cache.enqueue("track")
+	cookie := "SID=private-session"
+	cache.enqueue("track", cookie)
 	<-started
-	cache.enqueue("track")
+	cache.enqueue("track", "")
 	close(release)
+	if got := <-cookieSeen; got != cookie {
+		t.Errorf("download cookie = %q, want the signed-in session", got)
+	}
 	waitFor(t, func() bool {
 		cache.mu.Lock()
 		pending := len(cache.pending)
@@ -197,12 +207,12 @@ func TestTurningAudioCacheOffCancelsTheActiveDownload(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
-	cache.download = func(ctx context.Context, _, _ string) (string, error) {
+	cache.download = func(ctx context.Context, _, _, _ string) (string, error) {
 		close(started)
 		<-ctx.Done()
 		return "", ctx.Err()
 	}
-	cache.enqueue("track")
+	cache.enqueue("track", "")
 	<-started
 	cache.setLimit(0)
 	waitFor(t, func() bool {
@@ -222,12 +232,12 @@ func TestClosingAudioCacheStopsDownloadsAndKeepsCompletedFiles(t *testing.T) {
 	}
 	installTestAudio(t, cache, "completed")
 	started := make(chan struct{})
-	cache.download = func(ctx context.Context, _, _ string) (string, error) {
+	cache.download = func(ctx context.Context, _, _, _ string) (string, error) {
 		close(started)
 		<-ctx.Done()
 		return "", ctx.Err()
 	}
-	cache.enqueue("in-progress")
+	cache.enqueue("in-progress", "")
 	<-started
 	cache.close()
 	if _, ok := cache.get("completed"); !ok {
@@ -236,7 +246,7 @@ func TestClosingAudioCacheStopsDownloadsAndKeepsCompletedFiles(t *testing.T) {
 	if _, ok := cache.get("in-progress"); ok {
 		t.Error("closing the cache stored an incomplete download")
 	}
-	cache.enqueue("after-close")
+	cache.enqueue("after-close", "")
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	if len(cache.pending) != 0 {

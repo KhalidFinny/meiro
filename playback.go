@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand/v2"
 	"net/url"
+	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -221,15 +224,18 @@ func (a *app) stream(item youtube.MusicItem) {
 	gen := a.streamGen
 	a.resolving = true
 	client := a.client()
+	cookie := a.ytDlpCookie
+	log.Printf("playback: resolving video_id=%s signed_in=%t", item.VideoID, cookie != "")
 	a.run(func() {
 		streamURL, total := "", parseDuration(item.Duration)
 		var err error
 		cached, fromCache := a.currentAudioCache().get(item.VideoID)
 		if fromCache {
+			log.Printf("playback: audio cache hit video_id=%s", item.VideoID)
 			streamURL = cached
 		} else {
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-			streamURL, total, err = resolveStream(ctx, client, item)
+			streamURL, total, err = resolveStream(ctx, client, item, cookie)
 			cancel()
 		}
 		defer reclaimMemory()
@@ -239,17 +245,26 @@ func (a *app) stream(item youtube.MusicItem) {
 			}
 			a.resolving = false
 			if err != nil {
+				log.Printf("playback: audio resolution failed video_id=%s: %v", item.VideoID, err)
 				a.playErr = err.Error()
 				return
 			}
 			if total > 0 {
 				a.total = total
 			}
-			if err := a.player.Play(streamURL); err != nil {
-				a.playErr = err.Error()
-			} else if !fromCache {
-				cache, videoID := a.currentAudioCache(), item.VideoID
-				a.run(func() { cache.enqueue(videoID) })
+			if playerErr := a.player.Play(streamURL); playerErr != nil {
+				log.Printf("playback: player could not open video_id=%s: %v", item.VideoID, playerErr)
+				a.playErr = playerErr.Error()
+				return
+			}
+			source := "stream"
+			if fromCache {
+				source = "cache"
+			}
+			log.Printf("playback: audio started video_id=%s source=%s duration=%s", item.VideoID, source, total)
+			if !fromCache {
+				cache, videoID, cookie := a.currentAudioCache(), item.VideoID, cookie
+				a.run(func() { cache.enqueue(videoID, cookie) })
 			}
 		})
 	})
@@ -268,22 +283,25 @@ func (a *app) setAudioCacheLimit(limit int) {
 // resolveStream finds a URL ffmpeg can read. It asks YouTube through the
 // package first, and falls back to yt-dlp, which keeps working when
 // YouTube's player script has moved past what the package can decipher.
-func resolveStream(ctx context.Context, client *youtube.Client, item youtube.MusicItem) (string, time.Duration, error) {
+func resolveStream(ctx context.Context, client *youtube.Client, item youtube.MusicItem, cookie string) (string, time.Duration, error) {
 	var direct error
 	if client != nil {
 		info, err := client.GetTrackInfo(ctx, item.VideoID)
 		if err == nil {
 			if err := playabilityError(info.Playability); err != nil {
+				log.Printf("playback: YouTube rejected video_id=%s: %v", item.VideoID, err)
 				return "", 0, err
 			}
 			if format, ok := info.BestAudioFormat(); ok {
+				log.Printf("playback: YouTube resolved video_id=%s itag=%d mime=%s", item.VideoID, format.Itag, format.MimeType)
 				return format.PlayableURL(), parseDuration(info.VideoDetails.Length), nil
 			}
 			err = errors.New("no audio format could be read")
 		}
 		direct = fmt.Errorf("asking YouTube: %w", err)
+		log.Printf("playback: YouTube audio unavailable video_id=%s: %v; trying yt-dlp", item.VideoID, direct)
 	}
-	streamURL, total, err := ytDlpStream(ctx, item.VideoID)
+	streamURL, total, err := ytDlpStream(ctx, item.VideoID, cookie)
 	if err != nil {
 		// What yt-dlp said comes first, as the message shows only a line of it;
 		// what YouTube said is what to look at when yt-dlp is not there.
@@ -306,19 +324,36 @@ func playabilityError(status youtube.Playability) error {
 	return fmt.Errorf("YouTube cannot play this track (%s): %s", status.Status, reason)
 }
 
-// ytDlpStream asks yt-dlp for a direct audio URL.
-func ytDlpStream(ctx context.Context, videoID string) (string, time.Duration, error) {
+// ytDlpStream asks yt-dlp for a direct audio URL, using the signed-in session
+// when YouTube requires one.
+func ytDlpStream(ctx context.Context, videoID, cookie string) (string, time.Duration, error) {
 	path, err := toolPath("yt-dlp")
 	if err != nil {
 		return "", 0, errors.New("playing needs ffmpeg and yt-dlp on PATH")
 	}
-	command := exec.CommandContext(ctx, path,
-		"-f", "bestaudio", "-g", "--no-playlist", "--no-warnings",
+	jsRuntime, runtimeArgs := ytDlpJSRuntimeArgs()
+	args := []string{"-f", "bestaudio", "-g", "--no-playlist", "--verbose"}
+	args = append(args, runtimeArgs...)
+	if cookie != "" {
+		cookieFile, err := ytDlpCookieFile(cookie)
+		if err != nil {
+			return "", 0, fmt.Errorf("prepare yt-dlp authentication: %w", err)
+		}
+		defer os.Remove(cookieFile)
+		args = append(args, "--cookies", cookieFile)
+	}
+	args = append(args,
 		"https://music.youtube.com/watch?v="+url.QueryEscape(videoID))
+	command := exec.CommandContext(ctx, path, args...)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	started := time.Now()
+	log.Printf("playback: running yt-dlp video_id=%s authenticated=%t js_runtime=%s", videoID, cookie != "", jsRuntime)
 	output, err := command.Output()
 	if err != nil {
+		log.Printf("playback: yt-dlp failed video_id=%s elapsed=%s: %s", videoID, time.Since(started).Round(time.Millisecond), strings.TrimSpace(stderr.String()))
 		if exit := (*exec.ExitError)(nil); errors.As(err, &exit) {
-			if reason := lastError(string(exit.Stderr)); reason != "" {
+			if reason := lastError(stderr.String()); reason != "" {
 				return "", 0, fmt.Errorf("yt-dlp could not resolve the audio: %s", reason)
 			}
 		}
@@ -329,7 +364,64 @@ func ytDlpStream(ctx context.Context, videoID string) (string, time.Duration, er
 	if streamURL == "" {
 		return "", 0, errors.New("could not resolve the audio")
 	}
+	log.Printf("playback: yt-dlp resolved video_id=%s elapsed=%s", videoID, time.Since(started).Round(time.Millisecond))
 	return streamURL, durationFromURL(streamURL), nil
+}
+
+func ytDlpJSRuntimeArgs() (string, []string) {
+	for _, runtime := range []struct {
+		name   string
+		binary string
+	}{
+		{name: "deno", binary: "deno"},
+		{name: "node", binary: "node"},
+		{name: "bun", binary: "bun"},
+		{name: "quickjs", binary: "qjs"},
+	} {
+		path, err := exec.LookPath(runtime.binary)
+		if err == nil {
+			return runtime.name, []string{"--js-runtimes", runtime.name + ":" + path}
+		}
+	}
+	return "none", nil
+}
+
+// ytDlpCookieFile translates the app's YouTube Cookie header into the
+// temporary Netscape file yt-dlp accepts. CreateTemp keeps credentials private.
+func ytDlpCookieFile(cookie string) (string, error) {
+	file, err := os.CreateTemp("", "meiro-yt-dlp-cookies-*.txt")
+	if err != nil {
+		return "", err
+	}
+	name := file.Name()
+	remove := func() { _ = os.Remove(name) }
+	if _, err := file.WriteString("# Netscape HTTP Cookie File\n"); err != nil {
+		_ = file.Close()
+		remove()
+		return "", err
+	}
+	count := 0
+	for part := range strings.SplitSeq(cookie, ";") {
+		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok || key == "" || strings.ContainsAny(key+value, "\t\r\n") {
+			continue
+		}
+		if _, err := fmt.Fprintf(file, ".youtube.com\tTRUE\t/\tTRUE\t0\t%s\t%s\n", key, strings.TrimSpace(value)); err != nil {
+			_ = file.Close()
+			remove()
+			return "", err
+		}
+		count++
+	}
+	if err := file.Close(); err != nil {
+		remove()
+		return "", err
+	}
+	if count == 0 {
+		remove()
+		return "", errors.New("cookie header has no valid cookies")
+	}
+	return name, nil
 }
 
 // durationFromURL reads the track length YouTube puts in its media URLs.
