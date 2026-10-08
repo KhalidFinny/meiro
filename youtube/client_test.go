@@ -370,6 +370,42 @@ func TestUpNextKeepsPlaylistContextAndContinuesRadioQueue(t *testing.T) {
 	}
 }
 
+func TestGetUpNextResolvesAutomixPreview(t *testing.T) {
+	var nextRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/youtubei/v1/next" {
+			t.Fatalf("request path = %q, want /next", r.URL.Path)
+		}
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		switch nextRequests.Add(1) {
+		case 1:
+			if request["videoId"] != "seed-track" {
+				t.Errorf("initial request = %#v", request)
+			}
+			_, _ = w.Write([]byte(`{"contents":{"playlistPanelRenderer":{"playlistId":"","contents":[{"automixPreviewVideoRenderer":{"content":{"automixPlaylistVideoRenderer":{"navigationEndpoint":{"watchPlaylistEndpoint":{"playlistId":"RDAMVMseed-track","params":"RADIO_PARAMS"}}}}}}]}}}`))
+		case 2:
+			if request["videoId"] != "seed-track" || request["playlistId"] != "RDAMVMseed-track" || request["params"] != "RADIO_PARAMS" {
+				t.Errorf("automix request = %#v", request)
+			}
+			_, _ = w.Write([]byte(`{"contents":{"playlistPanelRenderer":{"playlistId":"RDAMVMseed-track","contents":[{"playlistPanelVideoRenderer":{"videoId":"radio-1","title":{"simpleText":"Radio track"}}}],"continuations":[{"nextRadioContinuationData":{"continuation":"RADIO_MORE"}}]}}}`))
+		default:
+			t.Errorf("unexpected /next request #%d", nextRequests.Load())
+		}
+	}))
+	defer server.Close()
+	client := NewClient(Options{BaseURL: server.URL, APIKey: "key"})
+	result, err := client.GetUpNext(context.Background(), "seed-track")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nextRequests.Load() != 2 || result.QueuePlaylistID != "RDAMVMseed-track" || result.ContinuationToken != "RADIO_MORE" || len(result.Items) != 1 || result.Items[0].VideoID != "radio-1" {
+		t.Fatalf("automix result after %d requests = %#v", nextRequests.Load(), result)
+	}
+}
+
 func TestGetAllPlaylistLoadsContinuationPages(t *testing.T) {
 	var continuationRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

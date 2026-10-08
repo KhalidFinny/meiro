@@ -58,6 +58,7 @@ type BrowseResult struct {
 	Items             []MusicItem       `json:"items"`
 	Sections          []MusicSection    `json:"sections,omitempty"`
 	ContinuationToken string            `json:"continuationToken,omitempty"`
+	QueuePlaylistID   string            `json:"queuePlaylistId,omitempty"`
 	Pages             []json.RawMessage `json:"pages,omitempty"`
 	Raw               json.RawMessage   `json:"raw"`
 }
@@ -527,7 +528,97 @@ func (c *Client) GetUpNextWithOptions(ctx context.Context, options UpNextOptions
 	if err != nil {
 		return nil, err
 	}
-	return c.newBrowseResult(raw), nil
+	result := c.newUpNextResult(raw)
+	if options.Continuation != "" || result.QueuePlaylistID != "" {
+		return result, nil
+	}
+	playlistPayload := automixPlaylistPayload(raw)
+	if playlistPayload == nil {
+		return result, nil
+	}
+	playlistPayload["videoId"] = options.VideoID
+	raw, err = c.execute(ctx, "next", playlistPayload)
+	if err != nil {
+		return nil, err
+	}
+	return c.newUpNextResult(raw), nil
+}
+
+func (c *Client) newUpNextResult(raw json.RawMessage) *BrowseResult {
+	result := c.newBrowseResult(raw)
+	result.QueuePlaylistID = upNextPlaylistID(raw)
+	return result
+}
+
+func upNextPlaylistID(raw json.RawMessage) string {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return ""
+	}
+	var walk func(any) string
+	walk = func(value any) string {
+		switch node := value.(type) {
+		case []any:
+			for _, child := range node {
+				if id := walk(child); id != "" {
+					return id
+				}
+			}
+		case map[string]any:
+			for _, key := range []string{"playlistPanelRenderer", "playlistPanelContinuation"} {
+				if panel, ok := node[key].(map[string]any); ok {
+					if id, ok := panel["playlistId"].(string); ok && id != "" {
+						return id
+					}
+				}
+			}
+			for _, key := range sortedKeys(node) {
+				if id := walk(node[key]); id != "" {
+					return id
+				}
+			}
+		}
+		return ""
+	}
+	return walk(root)
+}
+
+func automixPlaylistPayload(raw json.RawMessage) map[string]any {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return nil
+	}
+	var walk func(any) map[string]any
+	walk = func(value any) map[string]any {
+		switch node := value.(type) {
+		case []any:
+			for _, child := range node {
+				if payload := walk(child); payload != nil {
+					return payload
+				}
+			}
+		case map[string]any:
+			if preview, ok := node["automixPreviewVideoRenderer"].(map[string]any); ok {
+				content, _ := preview["content"].(map[string]any)
+				automix, _ := content["automixPlaylistVideoRenderer"].(map[string]any)
+				navigation, _ := automix["navigationEndpoint"].(map[string]any)
+				if payload, ok := navigation["watchPlaylistEndpoint"].(map[string]any); ok {
+					copy := make(map[string]any, len(payload))
+					for key, value := range payload {
+						copy[key] = value
+					}
+					return copy
+				}
+			}
+			for _, key := range sortedKeys(node) {
+				if payload := walk(node[key]); payload != nil {
+					return payload
+				}
+			}
+		}
+		return nil
+	}
+	return walk(root)
 }
 
 // ContinueUpNext requests another page of a queue returned by GetUpNext or
