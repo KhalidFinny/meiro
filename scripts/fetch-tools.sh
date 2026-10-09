@@ -26,26 +26,40 @@ else
 	ytdlp_url="https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}"
 fi
 
+# yt-dlp needs a JavaScript runtime to run the challenge solver scripts that
+# come with it. The app bundles QuickJS rather than depending on one the user
+# happens to have installed. Bump the version and the checksums together.
+QUICKJS_VERSION="0.17.0"
+quickjs_url="https://github.com/quickjs-ng/quickjs/releases/download/v${QUICKJS_VERSION}"
+
 case "$platform" in
 	darwin-arm64)
 		ffmpeg_asset="macarm64"
 		ffmpeg_sha256="22445d7299742749ad2eeb9ce87963d50def0357e45b3e6c7b69987c8365dbf6"
 		ytdlp_asset="yt-dlp_macos"
+		quickjs_asset="qjs-darwin-arm64"
+		quickjs_sha256="8be3ddfe3397d2e692e4e1e8972ee9d032a0a580505d2f8b4ea528cf1b651c11"
 		;;
 	darwin-amd64)
 		ffmpeg_asset="mac64"
 		ffmpeg_sha256="cb2b5c154d49a6b6bfe29fa6c16510e85dcbf60b805764121a167b093d4bb6fb"
 		ytdlp_asset="yt-dlp_macos"
+		quickjs_asset="qjs-darwin-x86_64"
+		quickjs_sha256="9e5e101b4fd13cda3204222ca9f8be35412c41dcdef3745829633b7a67245412"
 		;;
 	linux-amd64)
 		ffmpeg_asset="linux64"
 		ffmpeg_sha256="b86dc023c64a5a9a410e6e3a938a970460214fae78f31c1553c9f88f1c289b6a"
 		ytdlp_asset="yt-dlp_linux"
+		quickjs_asset="qjs-linux-x86_64"
+		quickjs_sha256="0bfc02511a9f549c28b53880d988fc7cd5d361e90c5e8afdfcd7dc6774ceace5"
 		;;
 	linux-arm64)
 		ffmpeg_asset="linuxarm64"
 		ffmpeg_sha256="7bc8e8d0986f7f4693f63e9728570f671f07b6e21c05d5465dd7ce461d1631dc"
 		ytdlp_asset="yt-dlp_linux_aarch64"
+		quickjs_asset="qjs-linux-aarch64"
+		quickjs_sha256="3372133484edf50a69f3c67903af41206d22a061e930e3cfb63269272ef56d2e"
 		;;
 	*)
 		printf 'Unsupported platform: %s\n' "$platform" >&2
@@ -108,6 +122,19 @@ else
 	curl -fsSL -o "$work/yt-dlp" "${ytdlp_url}/${ytdlp_asset}"
 	verify "$work/yt-dlp" "$expected"
 	install -m 0755 "$work/yt-dlp" "$out/bin/yt-dlp"
+fi
+
+echo "quickjs ${QUICKJS_VERSION} for ${platform}"
+if cached "$out/bin/qjs" "$quickjs_sha256"; then
+	echo "  already downloaded"
+else
+	curl -fsSL -o "$work/qjs" "${quickjs_url}/${quickjs_asset}"
+	verify "$work/qjs" "$quickjs_sha256"
+	install -m 0755 "$work/qjs" "$out/bin/qjs"
+fi
+if [[ ! -f "$out/licenses/quickjs-MIT.txt" ]]; then
+	curl -fsSL -o "$out/licenses/quickjs-MIT.txt" \
+		"https://raw.githubusercontent.com/quickjs-ng/quickjs/v${QUICKJS_VERSION}/LICENSE"
 fi
 
 echo "ready in ${out}"

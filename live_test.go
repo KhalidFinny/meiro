@@ -18,14 +18,13 @@ func TestLivePlayback(t *testing.T) {
 		t.Skip("set MEIRO_LIVE_PLAYBACK=1 to resolve and play a real track")
 	}
 	a := newApp()
-	a.public = youtube.NewClient(youtube.Options{})
 	item := youtube.MusicItem{VideoID: "khnokW3Mw24", Title: "Instant Crush"}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	streamURL, total, err := resolveStream(ctx, a.public, item, a.ytDlpCookie)
+	streamURL, total, err := ytDlpStream(ctx, item.VideoID, a.ytDlpCookie)
 	if err != nil {
-		t.Fatalf("resolveStream: %v", err)
+		t.Fatalf("ytDlpStream: %v", err)
 	}
 	t.Logf("resolved %d bytes of URL, total %v", len(streamURL), total)
 	if err := a.player.Play(streamURL); err != nil {

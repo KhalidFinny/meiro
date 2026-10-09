@@ -47,10 +47,6 @@ func (fakeMusic) RoundTrip(request *http.Request) (*http.Response, error) {
 	}
 	reply := homeResponse
 	switch {
-	case strings.Contains(request.URL.Path, "/iframe_api"):
-		reply = `var player = "https://www.youtube.com/s/player/abc123/player_es6.vflset/en_US/base.js"`
-	case strings.Contains(request.URL.Path, "/s/player/"):
-		reply = `var a = 1; signatureTimestamp: 12345, b = 2;`
 	case strings.Contains(asked, "FEmusic_explore"):
 		reply = exploreResponse
 	case strings.Contains(asked, "VLPL_video"):
@@ -60,8 +56,6 @@ func (fakeMusic) RoundTrip(request *http.Request) (*http.Response, error) {
 	case strings.Contains(asked, `"query"`):
 		searches.Add(1)
 		reply = searchResponse
-	case strings.Contains(asked, `"videoId"`):
-		reply = playerResponse
 	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
@@ -409,28 +403,6 @@ func TestNowPlayingArtworkOpensTrackActions(t *testing.T) {
 	}
 	if got, want := tt.Clipboard(), "https://music.youtube.com/watch?v=now-playing"; got != want {
 		t.Fatalf("copied playback link = %q, want %q", got, want)
-	}
-}
-
-func TestPlayabilityErrorUsesYouTubeReason(t *testing.T) {
-	if err := playabilityError(youtube.Playability{Status: "OK"}); err != nil {
-		t.Fatalf("playable status returned an error: %v", err)
-	}
-	for _, status := range []youtube.Playability{
-		{Status: "UNPLAYABLE", Reason: "This video is unavailable."},
-		{Status: "LOGIN_REQUIRED", Messages: []string{"Sign in to confirm your age."}},
-		{Status: "AGE_CHECK_REQUIRED"},
-	} {
-		err := playabilityError(status)
-		if err == nil || !strings.Contains(err.Error(), status.Status) {
-			t.Errorf("playability error for %+v = %v", status, err)
-		}
-		if status.Reason != "" && !strings.Contains(err.Error(), status.Reason) {
-			t.Errorf("error %q omitted reason %q", err, status.Reason)
-		}
-		if len(status.Messages) > 0 && !strings.Contains(err.Error(), status.Messages[0]) {
-			t.Errorf("error %q omitted message %q", err, status.Messages[0])
-		}
 	}
 }
 
@@ -873,12 +845,6 @@ func TestClockAndDuration(t *testing.T) {
 	if got := parseDuration("2023"); got != 0 {
 		t.Errorf("parseDuration of a year = %v", got)
 	}
-	if got := parseLengthSeconds("125"); got != 2*time.Minute+5*time.Second {
-		t.Errorf("parseLengthSeconds = %v", got)
-	}
-	if got := parseLengthSeconds("0"); got != 0 {
-		t.Errorf("parseLengthSeconds of nothing = %v", got)
-	}
 }
 
 func TestThumbnailURLAsksForASmallerPicture(t *testing.T) {
@@ -948,12 +914,6 @@ const searchResponse = `{"contents":{"musicShelfRenderer":{"contents":[
 		]
 	}}
 ]}}}`
-
-const playerResponse = `{
-	"videoDetails":{"videoId":"vid-1","title":"Ambient One","author":"Someone","lengthSeconds":"213"},
-	"streamingData":{"adaptiveFormats":[{"itag":251,"mimeType":"audio/webm; codecs=\"opus\"","bitrate":136544,"url":"https://media.test/audio"}]},
-	"playabilityStatus":{"status":"OK"}
-}`
 
 func TestCookieHeader(t *testing.T) {
 	const want = "SAPISID=abc; SID=def"

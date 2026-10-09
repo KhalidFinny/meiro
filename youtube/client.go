@@ -66,9 +66,7 @@ type Options struct {
 	VisitorData      string
 	Language         string
 	Country          string
-	// PlayerPoToken supplies an optional precomputed playback PO token.
-	PlayerPoToken string
-	CookieAuth    *CookieAuth
+	CookieAuth       *CookieAuth
 	// AllowInsecureCookieAuth permits sending CookieAuth to a non-YouTube or
 	// non-HTTPS BaseURL. This is intended for trusted local test servers only.
 	AllowInsecureCookieAuth bool
@@ -91,14 +89,11 @@ type Client struct {
 	visitorData             string
 	language                string
 	country                 string
-	playerPoToken           string
 	cookieAuth              *CookieAuth
 	allowInsecureCookieAuth bool
 	keepRenderers           bool
 
 	configMu sync.Mutex
-	playerMu sync.Mutex
-	player   *playerScript
 }
 
 // NewClient constructs a client. No network request is made until a method is
@@ -140,7 +135,6 @@ func NewClient(options Options) *Client {
 		visitorData:             options.VisitorData,
 		language:                options.Language,
 		country:                 options.Country,
-		playerPoToken:           options.PlayerPoToken,
 		cookieAuth:              options.CookieAuth,
 		allowInsecureCookieAuth: options.AllowInsecureCookieAuth,
 		keepRenderers:           options.KeepRenderers,

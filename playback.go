@@ -267,7 +267,6 @@ func (a *app) stream(item youtube.MusicItem) {
 	a.streamGen++
 	gen := a.streamGen
 	a.resolving = true
-	client := a.client()
 	cookie := a.ytDlpCookie
 	log.Printf("playback: resolving video_id=%s signed_in=%t", item.VideoID, cookie != "")
 	a.run(func() {
@@ -286,7 +285,7 @@ func (a *app) stream(item youtube.MusicItem) {
 			}
 		} else {
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-			streamURL, total, err = resolveStream(ctx, client, item, cookie)
+			streamURL, total, err = ytDlpStream(ctx, item.VideoID, cookie)
 			cancel()
 		}
 		defer reclaimMemory()
@@ -354,50 +353,6 @@ func (a *app) setAudioCacheLimit(limit int) {
 	a.saveSettings()
 }
 
-// resolveStream finds a URL ffmpeg can read. It asks YouTube through the
-// package first, and falls back to yt-dlp, which keeps working when
-// YouTube's player script has moved past what the package can decipher.
-func resolveStream(ctx context.Context, client *youtube.Client, item youtube.MusicItem, cookie string) (string, time.Duration, error) {
-	var direct error
-	if client != nil {
-		info, err := client.GetTrackInfo(ctx, item.VideoID)
-		if err == nil {
-			if err := playabilityError(info.Playability); err != nil {
-				log.Printf("playback: YouTube rejected video_id=%s: %v", item.VideoID, err)
-				return "", 0, err
-			}
-			if format, ok := info.BestAudioFormat(); ok {
-				log.Printf("playback: YouTube resolved video_id=%s itag=%d mime=%s", item.VideoID, format.Itag, format.MimeType)
-				return format.PlayableURL(), parseLengthSeconds(info.VideoDetails.Length), nil
-			}
-			err = errors.New("no audio format could be read")
-		}
-		direct = fmt.Errorf("asking YouTube: %w", err)
-		log.Printf("playback: YouTube audio unavailable video_id=%s: %v; trying yt-dlp", item.VideoID, direct)
-	}
-	streamURL, total, err := ytDlpStream(ctx, item.VideoID, cookie)
-	if err != nil {
-		// What yt-dlp said comes first, as the message shows only a line of it;
-		// what YouTube said is what to look at when yt-dlp is not there.
-		return "", 0, errors.Join(err, direct)
-	}
-	return streamURL, total, nil
-}
-
-func playabilityError(status youtube.Playability) error {
-	if status.Status == "" || status.Status == "OK" {
-		return nil
-	}
-	reason := strings.TrimSpace(status.Reason)
-	if reason == "" {
-		reason = strings.Join(status.Messages, " ")
-	}
-	if reason == "" {
-		reason = status.Status
-	}
-	return fmt.Errorf("YouTube cannot play this track (%s): %s", status.Status, reason)
-}
-
 // ytDlpStream asks yt-dlp for a direct audio URL, using the signed-in session
 // when YouTube requires one.
 func ytDlpStream(ctx context.Context, videoID, cookie string) (string, time.Duration, error) {
@@ -442,7 +397,16 @@ func ytDlpStream(ctx context.Context, videoID, cookie string) (string, time.Dura
 	return streamURL, durationFromURL(streamURL), nil
 }
 
+// ytDlpJSRuntimeArgs names the JavaScript runtime yt-dlp should use to solve
+// YouTube's challenges, and the arguments that enable it. yt-dlp ships the
+// EJS solver scripts but needs a runtime to run them. The app ships QuickJS
+// because it is small and runs the scripts with restricted permissions. Any
+// runtime already on PATH is the fallback for a checkout that has not fetched
+// the bundled tools yet.
 func ytDlpJSRuntimeArgs() (string, []string) {
+	if path, err := toolPath("qjs"); err == nil {
+		return "quickjs", []string{"--js-runtimes", "quickjs:" + path}
+	}
 	for _, runtime := range []struct {
 		name   string
 		binary string
@@ -450,7 +414,6 @@ func ytDlpJSRuntimeArgs() (string, []string) {
 		{name: "deno", binary: "deno"},
 		{name: "node", binary: "node"},
 		{name: "bun", binary: "bun"},
-		{name: "quickjs", binary: "qjs"},
 	} {
 		path, err := exec.LookPath(runtime.binary)
 		if err == nil {
@@ -563,16 +526,6 @@ func parseFFmpegDuration(output string) time.Duration {
 		return time.Duration((hours*3600 + minutes*60 + seconds) * float64(time.Second))
 	}
 	return 0
-}
-
-// parseLengthSeconds reads a length in whole seconds, as YouTube's
-// lengthSeconds reports it; 0 if it reads as none.
-func parseLengthSeconds(text string) time.Duration {
-	seconds, err := strconv.Atoi(strings.TrimSpace(text))
-	if err != nil || seconds <= 0 {
-		return 0
-	}
-	return time.Duration(seconds) * time.Second
 }
 
 // advance plays the next track of the queue, waiting for recommendations at

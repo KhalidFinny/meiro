@@ -221,10 +221,10 @@ func newApp() *app {
 var lastReclaim atomic.Int64
 
 // reclaimMemory gives the runtime's free memory back to the system. Reading a
-// page, or YouTube's player script, builds far more garbage than it keeps, and
-// the runtime would sit on that memory for a while after. It is for the app
-// to ask, not the youtube package, and no more than every few seconds, for a
-// run of loads costs one collection.
+// page builds far more garbage than it keeps, and the runtime would sit on
+// that memory for a while after. It is for the app to ask, not the youtube
+// package, and no more than every few seconds, for a run of loads costs one
+// collection.
 func reclaimMemory() {
 	const every = 5 * time.Second
 	now := time.Now().UnixNano()

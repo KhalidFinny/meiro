@@ -128,8 +128,9 @@ macOS Apple Silicon and Intel, plus Linux `amd64` and `arm64` `.deb`, `.rpm`,
 - [MyGo](https://mygo.egoist.dev/) by [EGOIST](https://github.com/egoist),
   the framework that draws Meiro's native window and interface.
 - [ffmpeg](https://github.com/jellyfin/jellyfin-ffmpeg) decodes the audio,
-  and [yt-dlp](https://github.com/yt-dlp/yt-dlp) finds the streams. Both
-  ship inside the app; see
+  [yt-dlp](https://github.com/yt-dlp/yt-dlp) finds the streams, and
+  [QuickJS](https://github.com/quickjs-ng/quickjs) runs the JavaScript yt-dlp
+  needs to solve YouTube's challenges. All three ship inside the app; see
   [`resources/THIRD-PARTY-NOTICES.md`](resources/THIRD-PARTY-NOTICES.md).
 - [Google Sans](https://github.com/googlefonts/googlesans) sets the text,
   under the SIL Open Font License (`fonts/OFL.txt`).
