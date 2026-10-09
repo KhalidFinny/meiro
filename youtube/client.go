@@ -1,9 +1,6 @@
-// Package youtube provides a small, read-only YouTube Music client.
-//
-// The package is independent of the desktop application and can be imported on
-// its own. It uses YouTube's InnerTube API and preserves each response's raw
-// JSON so callers can access fields that are not mapped to the convenience
-// types yet.
+// Package youtube provides the read-only YouTube Music client Meiro browses
+// and plays with. It uses YouTube's InnerTube API and parses the responses
+// into the small convenience types the app needs.
 package youtube
 
 import (
@@ -25,7 +22,6 @@ const (
 	defaultMusicVersion  = "1.20250219.01.00"
 	defaultWebVersion    = "2.20260623.01.00"
 	defaultMusicContext  = "WEB_REMIX"
-	defaultMusicClient   = "YTMUSIC"
 	defaultMusicClientID = "67"
 )
 
@@ -59,11 +55,6 @@ type Options struct {
 	// AllowInsecureCookieAuth permits sending CookieAuth to a non-YouTube or
 	// non-HTTPS BaseURL. This is intended for trusted local test servers only.
 	AllowInsecureCookieAuth bool
-	// KeepRenderers keeps the renderer JSON in MusicItem.Raw and
-	// MusicSection.Raw. It is dropped by default: the result's own Raw still
-	// holds the whole response, but the items a caller keeps around for as
-	// long as a page is open should not each carry a copy of theirs.
-	KeepRenderers bool
 }
 
 // Client issues read-only YouTube Music requests.
@@ -78,7 +69,6 @@ type Client struct {
 	country                 string
 	cookieAuth              *CookieAuth
 	allowInsecureCookieAuth bool
-	keepRenderers           bool
 }
 
 // newHTTPClient builds the default HTTP client. It bounds only the wait for
@@ -121,7 +111,6 @@ func NewClient(options Options) *Client {
 		country:                 options.Country,
 		cookieAuth:              options.CookieAuth,
 		allowInsecureCookieAuth: options.AllowInsecureCookieAuth,
-		keepRenderers:           options.KeepRenderers,
 	}
 }
 

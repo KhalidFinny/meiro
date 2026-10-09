@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -165,8 +166,8 @@ func TestGetAllLibraryLoadsEverySectionContinuation(t *testing.T) {
 	if len(library.Sections) != 2 || library.Sections[0].Title == "" || library.Sections[1].Title == "" {
 		t.Errorf("library sections = %#v", library.Sections)
 	}
-	if len(library.Pages) != 3 || library.ContinuationToken != "" {
-		t.Errorf("library pages/continuation = %d / %q", len(library.Pages), library.ContinuationToken)
+	if library.ContinuationToken != "" {
+		t.Errorf("library continuation = %q, want none after every page loaded", library.ContinuationToken)
 	}
 }
 
@@ -318,7 +319,7 @@ func TestPlaylistAndUpNextAreReadOnlyBrowseCalls(t *testing.T) {
 	if len(playlist.Sections) != 1 || playlist.Sections[0].Kind != "playlistVideoListRenderer" || len(playlist.Sections[0].Items) != 1 {
 		t.Errorf("playlist sections = %#v", playlist.Sections)
 	}
-	next, err := client.GetUpNext(context.Background(), "playlist-track")
+	next, err := client.GetUpNext(context.Background(), UpNextOptions{VideoID: "playlist-track"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +362,7 @@ func TestTrackReadsArtistBrowseIDFromItsSubtitle(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"videoId":"track-1","flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"simpleText":"Track"}}},{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Album","navigationEndpoint":{"browseEndpoint":{"browseId":"MPRalbum"}}},{"text":" • "},{"text":"Artist","navigationEndpoint":{"browseEndpoint":{"browseId":"UCartist"}}}]}}}]}`), &renderer); err != nil {
 		t.Fatal(err)
 	}
-	item := parseMusicItem("track", renderer, false)
+	item := parseMusicItem("track", renderer)
 	if item.BrowseID != "UCartist" {
 		t.Errorf("track artist browse ID = %q, want UCartist", item.BrowseID)
 	}
@@ -420,7 +421,7 @@ func TestUpNextKeepsPlaylistContextAndContinuesRadioQueue(t *testing.T) {
 	client := NewClient(Options{BaseURL: server.URL, APIKey: "key"})
 	index := 2
 	options := UpNextOptions{VideoID: "track-1", PlaylistID: "PL123", PlaylistIndex: &index}
-	next, err := client.GetUpNextWithOptions(context.Background(), options)
+	next, err := client.GetUpNext(context.Background(), options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +464,7 @@ func TestGetUpNextResolvesAutomixPreview(t *testing.T) {
 	}))
 	defer server.Close()
 	client := NewClient(Options{BaseURL: server.URL, APIKey: "key"})
-	result, err := client.GetUpNext(context.Background(), "seed-track")
+	result, err := client.GetUpNext(context.Background(), UpNextOptions{VideoID: "seed-track"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +502,7 @@ func TestGetAllPlaylistLoadsContinuationPages(t *testing.T) {
 	if continuationRequests.Load() != 1 || len(playlist.Items) != 2 {
 		t.Fatalf("playlist has %d items after %d continuation calls: %#v", len(playlist.Items), continuationRequests.Load(), playlist.Items)
 	}
-	if playlist.Items[0].VideoID != "playlist-1" || playlist.Items[1].VideoID != "playlist-2" || len(playlist.Pages) != 2 || playlist.ContinuationToken != "" {
+	if playlist.Items[0].VideoID != "playlist-1" || playlist.Items[1].VideoID != "playlist-2" || playlist.ContinuationToken != "" {
 		t.Errorf("playlist continuation result = %#v", playlist)
 	}
 }
@@ -589,9 +590,6 @@ func TestGetAccountDetailsReadsTheAccountMenu(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(account.Raw), `"accountName"`) {
-		t.Errorf("account response = %s", account.Raw)
-	}
 	if account.Name != "Me" || account.Email != "me@example.com" || account.ChannelID != "UC-me" || account.Thumbnail != "https://img.example/me" {
 		t.Errorf("account details = %#v", account)
 	}
@@ -642,7 +640,7 @@ func TestCookieAuthenticationAndAllAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(accounts.Raw), "UC-channel") || len(accounts.Items) != 1 {
+	if len(accounts.Items) != 1 {
 		t.Errorf("accounts response = %#v", accounts)
 	} else if channel := accounts.Items[0]; channel.Name != "Main channel" || channel.Byline != "Creator" || channel.ChannelID != "UC-channel" || channel.Handle != "@main" || !channel.Selected || !channel.HasChannel || channel.Thumbnail != "https://img.example/main" {
 		t.Errorf("parsed account channel = %#v", channel)
@@ -692,33 +690,34 @@ func TestIsYouTubeURLRequiresHTTPSAndAYouTubeHostname(t *testing.T) {
 	}
 }
 
-func TestResultsDropRendererJSONUnlessKept(t *testing.T) {
-	page := `{"contents":{"musicCarouselShelfRenderer":{"header":{"musicCarouselShelfBasicHeaderRenderer":{"title":{"runs":[{"text":"Shelf"}]}}},"contents":[{"musicResponsiveListItemRenderer":{"videoId":"track-1","flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"First track"}]}}}]}}]}}}`
+func TestGetSearchSuggestionsParsesCompletionsInOrder(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(page))
+		if r.URL.Path != "/youtubei/v1/music/get_search_suggestions" {
+			t.Errorf("request path = %q", r.URL.Path)
+		}
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request["input"] != "yor" {
+			t.Errorf("suggestion input = %v", request["input"])
+		}
+		_, _ = w.Write([]byte(`{"contents":[{"searchSuggestionsSectionRenderer":{"contents":[` +
+			`{"searchSuggestionRenderer":{"suggestion":{"runs":[{"text":"yorushika"}]}}},` +
+			`{"searchSuggestionRenderer":{"suggestion":{"runs":[{"text":"yorushika songs"}]}}},` +
+			`{"searchSuggestionRenderer":{"suggestion":{"runs":[{"text":"yorushika"}]}}}]}}]}`))
 	}))
 	defer server.Close()
-	for _, keep := range []bool{false, true} {
-		client := NewClient(Options{BaseURL: server.URL, APIKey: "key", KeepRenderers: keep})
-		result, err := client.GetHomeFeed(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(result.Sections) != 1 || len(result.Sections[0].Items) != 1 || len(result.Items) != 1 {
-			t.Fatalf("keep=%v: sections = %#v, items = %#v", keep, result.Sections, result.Items)
-		}
-		item, section := result.Sections[0].Items[0], result.Sections[0]
-		if item.Title != "First track" || section.Title != "Shelf" {
-			t.Errorf("keep=%v: item %q in shelf %q", keep, item.Title, section.Title)
-		}
-		kept := len(item.Raw) > 0 && len(section.Raw) > 0 && len(result.Items[0].Raw) > 0
-		dropped := len(item.Raw) == 0 && len(section.Raw) == 0 && len(result.Items[0].Raw) == 0
-		if keep && !kept || !keep && !dropped {
-			t.Errorf("keep=%v: item raw %d, section raw %d, page item raw %d bytes", keep, len(item.Raw), len(section.Raw), len(result.Items[0].Raw))
-		}
-		if len(result.Raw) == 0 {
-			t.Errorf("keep=%v: the response itself should stay", keep)
-		}
+	client := NewClient(Options{BaseURL: server.URL, APIKey: "key"})
+	suggestions, err := client.GetSearchSuggestions(context.Background(), "yor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"yorushika", "yorushika songs"}; !slices.Equal(suggestions, want) {
+		t.Errorf("suggestions = %#v, want %#v", suggestions, want)
+	}
+	if _, err := client.GetSearchSuggestions(context.Background(), "  "); err == nil {
+		t.Error("GetSearchSuggestions accepted a blank input")
 	}
 }
 
@@ -728,12 +727,12 @@ func TestExtractMusicItemsKeepsASongListedTwice(t *testing.T) {
 			`"flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Song"}]}}}]}}`
 	}
 	twice := []byte(`{"contents":[` + entry("S1") + `,` + entry("S2") + `]}`)
-	if got := extractMusicItems(decodeResponse(twice), false); len(got) != 2 {
+	if got := extractMusicItems(decodeResponse(twice)); len(got) != 2 {
 		t.Errorf("a playlist holding a song twice gave %d items, want 2", len(got))
 	}
 	// The same entry met twice, as a response may repeat one, stays one.
 	repeated := []byte(`{"contents":[` + entry("S1") + `,` + entry("S1") + `]}`)
-	if got := extractMusicItems(decodeResponse(repeated), false); len(got) != 1 {
+	if got := extractMusicItems(decodeResponse(repeated)); len(got) != 1 {
 		t.Errorf("a repeated entry gave %d items, want 1", len(got))
 	}
 }
