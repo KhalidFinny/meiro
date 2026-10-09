@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -305,13 +306,10 @@ func (p *Player) startLocked(url string, at time.Duration, paused bool) error {
 }
 
 // streamArgs is the ffmpeg command line that decodes url from at into signed
-// 16-bit stereo PCM on stdout. The reconnect and user-agent options belong to
-// the HTTP protocol, so a local file, which a cached track is, must not
-// receive them: ffmpeg refuses an option its protocol does not define and
-// plays nothing.
+// 16-bit stereo PCM on stdout.
 func streamArgs(url string, at time.Duration) []string {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
-	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+	if isHTTP(url) {
 		args = append(args,
 			"-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
 			"-user_agent", userAgent,
@@ -326,6 +324,24 @@ func streamArgs(url string, at time.Duration) []string {
 		"-ac", strconv.Itoa(channelCount), "-ar", strconv.Itoa(sampleRate),
 		"pipe:1",
 	)
+}
+
+// isHTTP reports whether rawURL is read over HTTP, the only protocol that
+// defines the reconnect and user-agent options streamArgs adds. A cached
+// track is a plain path, and ffmpeg refuses an input given an option its
+// protocol does not define, so it must not receive them. Add a scheme here to
+// give it the same options.
+func isHTTP(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return true
+	default:
+		return false
+	}
 }
 
 // reap waits for ffmpeg to exit and records how, then marks the session done.

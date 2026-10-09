@@ -209,3 +209,25 @@ func TestStreamArgsOnlySendHTTPOptionsToHTTPURLs(t *testing.T) {
 		t.Errorf("a seek on a local file lost its offset or input: %s", seeking)
 	}
 }
+
+// isHTTP decides which inputs the HTTP-only options may be given, so a path
+// with a drive letter, a bare file name, or another protocol must not match.
+func TestIsHTTPRecognisesOnlyTheStreamingSchemes(t *testing.T) {
+	for _, test := range []struct {
+		rawURL string
+		want   bool
+	}{
+		{"http://media.example/a", true},
+		{"https://media.example/a?dur=3", true},
+		{"HTTPS://media.example/a", true},
+		{"rtsp://camera/a", false},
+		{"/Users/me/Meiro Audio Cache/abc.webm", false},
+		{"track.webm", false},
+		{"C:\\Meiro Audio Cache\\abc.webm", false},
+		{"", false},
+	} {
+		if got := isHTTP(test.rawURL); got != test.want {
+			t.Errorf("isHTTP(%q) = %v, want %v", test.rawURL, got, test.want)
+		}
+	}
+}

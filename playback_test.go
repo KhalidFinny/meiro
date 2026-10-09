@@ -2,9 +2,36 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/elianiva/meiro/youtube"
 )
+
+// Warming downloads the next track, which is only worth its bandwidth when
+// the cache keeps enough tracks for it to still be there when it plays. At a
+// limit of one it would evict the track that is playing.
+func TestWarmNextNeedsACacheThatKeepsMoreThanOneTrack(t *testing.T) {
+	for _, limit := range []int{0, 1, 2} {
+		a := newTestApp()
+		cache, err := newAudioCache(filepath.Join(t.TempDir(), "audio"), limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.replaceAudioCache(cache)
+		a.current = youtube.MusicItem{VideoID: "playing"}
+		a.queue = []youtube.MusicItem{{VideoID: "playing"}, {VideoID: "next"}}
+		a.index = 0
+		queued := 0
+		a.run = func(work func()) { queued++ }
+		a.warmNext()
+		if wantQueued := limit > 1; (queued > 0) != wantQueued {
+			t.Errorf("warmNext with a cache limit of %d queued %d downloads, want queued=%v", limit, queued, wantQueued)
+		}
+		cache.close()
+	}
+}
 
 func TestYtDlpCookieFileUsesPrivateNetscapeFormat(t *testing.T) {
 	path, err := ytDlpCookieFile("SID=session; SAPISID=secret=value")

@@ -314,7 +314,8 @@ func (a *app) stream(item youtube.MusicItem) {
 
 // warmNext starts the next queue track downloading while the current one
 // plays, so a play that follows opens a local file instead of waiting on the
-// network. It does nothing when the queue ends at the current track.
+// network. It does nothing when the queue ends at the current track, or when
+// the cache is too small for a warmed track to survive until it plays.
 func (a *app) warmNext() {
 	if a.index+1 >= len(a.queue) {
 		return
@@ -324,6 +325,9 @@ func (a *app) warmNext() {
 		return
 	}
 	cache, cookie := a.currentAudioCache(), a.ytDlpCookie
+	if !cache.warmable() {
+		return
+	}
 	a.run(func() { cache.enqueue(next.VideoID, cookie) })
 }
 

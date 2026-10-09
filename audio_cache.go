@@ -113,6 +113,18 @@ func (c *audioCache) setLimit(limit int) {
 	c.mu.Unlock()
 }
 
+// warmable reports whether the cache keeps enough tracks for one downloaded
+// ahead of time to survive until it plays. At a limit of one, the warmed
+// track evicts the track that is playing, so nothing is gained.
+func (c *audioCache) warmable() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.closed && c.limit > 1
+}
+
 // get returns a cached file and moves it to the most-recently-used end.
 func (c *audioCache) get(videoID string) (string, bool) {
 	if c == nil || videoID == "" {
