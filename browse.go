@@ -245,7 +245,7 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 			m3.Text(c, m3.BodySmall, item.Subtitle).SingleLine().TextColor(sc.OnSurfaceVariant).Margin(-6, 4, 0)
 		}
 	})
-	if hasMenu && menuButton.Clicked() {
+	if hasMenu && (menuButton.Clicked() || card.RightClicked()) {
 		a.trackMenuKey, a.trackMenuOpen = key+"-menu", true
 		menuClicked = true
 	}
@@ -397,7 +397,7 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 			hasMenu = true
 		}
 	})
-	if hasMenu && menuButton.Clicked() {
+	if hasMenu && (menuButton.Clicked() || main.RightClicked()) {
 		a.trackMenuKey, a.trackMenuOpen = key, true
 	}
 	if hasMenu && a.trackMenuKey == key {
