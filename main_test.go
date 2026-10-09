@@ -1006,6 +1006,51 @@ func TestChromiumProfiles(t *testing.T) {
 	if got := chromiumProfiles(filepath.Join(dir, "missing")); got != nil {
 		t.Errorf("a missing directory gave %q", got)
 	}
+	if got, want := profileSelectors("chrome", chromiumProfiles(dir), true), []string{
+		"chrome:" + filepath.Join(dir, "Default"),
+		"chrome:" + filepath.Join(dir, "Profile 3"),
+		"chrome",
+	}; !slices.Equal(got, want) {
+		t.Errorf("Chrome selectors = %q, want %q", got, want)
+	}
+}
+
+func TestFirefoxProfiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, database := range []string{"primary.default/cookies.sqlite", "secondary.default-release/cookies.sqlite"} {
+		path := filepath.Join(dir, filepath.FromSlash(database))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profiles := firefoxProfiles([]string{dir})
+	want := []string{filepath.Join(dir, "primary.default"), filepath.Join(dir, "secondary.default-release")}
+	if !slices.Equal(profiles, want) {
+		t.Errorf("firefoxProfiles() = %q, want %q", profiles, want)
+	}
+	if got, want := profileSelectors("firefox", profiles, true), []string{
+		"firefox:" + filepath.Join(dir, "primary.default"),
+		"firefox:" + filepath.Join(dir, "secondary.default-release"),
+		"firefox",
+	}; !slices.Equal(got, want) {
+		t.Errorf("Firefox selectors = %q, want %q", got, want)
+	}
+}
+
+func TestZenProfileRoots(t *testing.T) {
+	home, config := "/home/mei", "/home/mei/.config"
+	got := zenProfileRoots(home, config, "linux")
+	want := []string{
+		filepath.Join(home, ".zen"),
+		filepath.Join(home, ".var", "app", "app.zen_browser.zen", "zen"),
+		filepath.Join(config, "zen"),
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("zenProfileRoots() = %q, want %q", got, want)
+	}
 }
 
 func TestSignInDialogOffersBrowsersInADropdown(t *testing.T) {
@@ -1022,7 +1067,7 @@ func TestSignInDialogOffersBrowsersInADropdown(t *testing.T) {
 	if err := tt.Click("Import from a browser"); err != nil {
 		t.Fatal(err)
 	}
-	for _, browser := range []string{"Chrome", "Safari", "Firefox", "Brave", "Edge"} {
+	for _, browser := range []string{"Chrome", "Safari", "Firefox", "Brave", "Edge", "Zen"} {
 		if !tt.HasText(browser) {
 			t.Errorf("the dropdown is missing %s: %q", browser, tt.Texts())
 		}

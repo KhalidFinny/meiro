@@ -21,15 +21,22 @@ type importSource struct {
 	read func(ctx context.Context) (string, error)
 }
 
-// importSources lists the browsers to offer: the ones yt-dlp knows by name,
-// and those it does not but that keep their profiles like Chromium does.
+// browserImport describes the profile selectors of one browser. Its selectors
+// are tried in order so a signed-in secondary profile wins over an unsigned
+// default profile.
+type browserImport struct {
+	label, id string
+	selectors func() []string
+}
+
+// importSources lists the browsers to offer and keeps profile discovery shared
+// across Chromium- and Firefox-based browsers.
 func importSources() []importSource {
 	var sources []importSource
-	for _, browser := range []struct{ label, id string }{
-		{"Chrome", "chrome"}, {"Safari", "safari"}, {"Firefox", "firefox"}, {"Brave", "brave"}, {"Edge", "edge"},
-	} {
+	for _, browser := range browserImports() {
+		browser := browser
 		sources = append(sources, importSource{browser.label, browser.id, func(ctx context.Context) (string, error) {
-			return firstSession(ctx, browser.label, []string{browser.id}, ytDlpCookie)
+			return firstSession(ctx, browser.label, browser.selectors(), ytDlpCookie)
 		}})
 	}
 	if home, err := os.UserHomeDir(); err == nil && runtime.GOOS == "darwin" {
@@ -44,6 +51,161 @@ func importSources() []importSource {
 		}
 	}
 	return sources
+}
+
+func browserImports() []browserImport {
+	return []browserImport{
+		{"Chrome", "chrome", func() []string { return chromiumBrowserSelectors("chrome") }},
+		{"Safari", "safari", func() []string { return []string{"safari"} }},
+		{"Firefox", "firefox", firefoxBrowserSelectors},
+		{"Brave", "brave", func() []string { return chromiumBrowserSelectors("brave") }},
+		{"Edge", "edge", func() []string { return chromiumBrowserSelectors("edge") }},
+		{"Zen", "zen", zenBrowserSelectors},
+	}
+}
+
+func chromiumBrowserSelectors(browser string) []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return []string{browser}
+	}
+	config, _ := os.UserConfigDir()
+	root := chromiumProfileRoot(browser, home, config, os.Getenv("LOCALAPPDATA"), runtime.GOOS)
+	return profileSelectors(browser, chromiumProfiles(root), true)
+}
+
+func firefoxBrowserSelectors() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return []string{"firefox"}
+	}
+	config, _ := os.UserConfigDir()
+	return profileSelectors("firefox", firefoxProfiles(firefoxProfileRoots(home, config, runtime.GOOS)), true)
+}
+
+func zenBrowserSelectors() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	config, _ := os.UserConfigDir()
+	return profileSelectors("firefox", firefoxProfiles(zenProfileRoots(home, config, runtime.GOOS)), false)
+}
+
+// profileSelectors gives yt-dlp one explicit profile at a time. The native
+// selector remains as a fallback for browsers yt-dlp can locate itself.
+func profileSelectors(browser string, profiles []string, fallback bool) []string {
+	selectors := make([]string, 0, len(profiles)+1)
+	for _, profile := range profiles {
+		selectors = append(selectors, browser+":"+profile)
+	}
+	if fallback {
+		selectors = append(selectors, browser)
+	}
+	return uniquePaths(selectors)
+}
+
+// chromiumProfileRoot returns the user-data directory that contains Default
+// and Profile * directories for a Chromium-based browser.
+func chromiumProfileRoot(browser, home, config, local, goos string) string {
+	if config == "" && goos == "linux" {
+		config = filepath.Join(home, ".config")
+	}
+	var path string
+	switch goos {
+	case "linux":
+		path = map[string]string{
+			"chrome": filepath.Join(config, "google-chrome"),
+			"brave":  filepath.Join(config, "BraveSoftware", "Brave-Browser"),
+			"edge":   filepath.Join(config, "microsoft-edge"),
+		}[browser]
+	case "darwin":
+		path = map[string]string{
+			"chrome": filepath.Join(home, "Library", "Application Support", "Google", "Chrome"),
+			"brave":  filepath.Join(home, "Library", "Application Support", "BraveSoftware", "Brave-Browser"),
+			"edge":   filepath.Join(home, "Library", "Application Support", "Microsoft Edge"),
+		}[browser]
+	case "windows":
+		if local == "" {
+			local = filepath.Join(home, "AppData", "Local")
+		}
+		path = map[string]string{
+			"chrome": filepath.Join(local, "Google", "Chrome", "User Data"),
+			"brave":  filepath.Join(local, "BraveSoftware", "Brave-Browser", "User Data"),
+			"edge":   filepath.Join(local, "Microsoft", "Edge", "User Data"),
+		}[browser]
+	}
+	return path
+}
+
+// firefoxProfileRoots lists the Firefox data roots supported by yt-dlp.
+func firefoxProfileRoots(home, config, goos string) []string {
+	if config == "" && goos == "linux" {
+		config = filepath.Join(home, ".config")
+	}
+	var roots []string
+	switch goos {
+	case "linux":
+		roots = append(roots,
+			filepath.Join(config, "mozilla", "firefox"),
+			filepath.Join(home, ".mozilla", "firefox"),
+			filepath.Join(home, ".var", "app", "org.mozilla.firefox", "config", "mozilla", "firefox"),
+			filepath.Join(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
+			filepath.Join(home, "snap", "firefox", "common", ".mozilla", "firefox"),
+		)
+	case "darwin":
+		roots = append(roots, filepath.Join(home, "Library", "Application Support", "Firefox", "Profiles"))
+	case "windows":
+		roots = append(roots, filepath.Join(config, "Mozilla", "Firefox", "Profiles"))
+	}
+	return uniquePaths(roots)
+}
+
+// zenProfileRoots lists the data roots Zen uses on each desktop platform.
+func zenProfileRoots(home, config, goos string) []string {
+	var roots []string
+	switch goos {
+	case "linux":
+		roots = append(roots,
+			filepath.Join(home, ".zen"),
+			filepath.Join(home, ".var", "app", "app.zen_browser.zen", "zen"),
+		)
+	case "darwin":
+		roots = append(roots, filepath.Join(home, "Library", "Application Support", "zen"))
+	default:
+		roots = append(roots, filepath.Join(home, ".zen"))
+	}
+	if config != "" && goos != "darwin" {
+		roots = append(roots, filepath.Join(config, "zen"))
+	}
+	return uniquePaths(roots)
+}
+
+// firefoxProfiles returns all profiles below the browser's data roots that
+// have a Firefox cookie database.
+func firefoxProfiles(roots []string) []string {
+	var profiles []string
+	for _, root := range roots {
+		if profileHasDatabase(root, "cookies.sqlite") {
+			profiles = append(profiles, root)
+		}
+		for _, base := range []string{root, filepath.Join(root, "Profiles")} {
+			entries, err := os.ReadDir(base)
+			if err != nil {
+				continue
+			}
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				profile := filepath.Join(base, entry.Name())
+				if profileHasDatabase(profile, "cookies.sqlite") {
+					profiles = append(profiles, profile)
+				}
+			}
+		}
+	}
+	return uniquePaths(profiles)
 }
 
 // chromiumProfiles returns the directories of the profiles in a Chromium
@@ -61,15 +223,37 @@ func chromiumProfiles(dir string) []string {
 			continue
 		}
 		profile := filepath.Join(dir, name)
-		for _, database := range []string{"Cookies", filepath.Join("Network", "Cookies")} {
-			if _, err := os.Stat(filepath.Join(profile, database)); err == nil {
-				profiles = append(profiles, profile)
-				break
-			}
+		if profileHasDatabase(profile, "Cookies", filepath.Join("Network", "Cookies")) {
+			profiles = append(profiles, profile)
 		}
 	}
 	// ReadDir sorts by name, which puts "Default" first.
 	return profiles
+}
+
+func profileHasDatabase(profile string, databases ...string) bool {
+	for _, database := range databases {
+		if _, err := os.Stat(filepath.Join(profile, database)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func uniquePaths(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
 }
 
 // firstSession tries each place a browser may keep its session, a profile or
