@@ -413,7 +413,7 @@ func ytDlpStream(ctx context.Context, videoID, cookie string) (string, time.Dura
 		if err != nil {
 			return "", 0, fmt.Errorf("prepare yt-dlp authentication: %w", err)
 		}
-		defer os.Remove(cookieFile)
+		defer func() { _ = os.Remove(cookieFile) }()
 		args = append(args, "--cookies", cookieFile)
 	}
 	args = append(args,

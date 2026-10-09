@@ -35,7 +35,8 @@ func (p Palette) Tone(t float64) ui.Color {
 func toneToLightness(tone float64) float64 {
 	var y float64
 	if tone > 8 {
-		y = math.Pow((tone+16)/116, 3)
+		v := (tone + 16) / 116
+		y = v * v * v
 	} else {
 		y = tone / 903.2963
 	}

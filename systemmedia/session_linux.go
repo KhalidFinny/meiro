@@ -295,12 +295,14 @@ func (api *mprisPlayer) SeekBy(offset int64) *dbus.Error {
 	}
 	return nil
 }
+
 func (api *mprisPlayer) SetPosition(trackID dbus.ObjectPath, position int64) *dbus.Error {
 	if trackID == api.trackID() && api.controls.Seek != nil {
 		api.controls.Seek(time.Duration(position) * time.Microsecond)
 	}
 	return nil
 }
+
 func (*mprisPlayer) OpenUri(string) *dbus.Error {
 	return dbus.NewError("org.freedesktop.DBus.Error.NotSupported", nil)
 }

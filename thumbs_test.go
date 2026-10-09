@@ -32,7 +32,7 @@ func TestThumbCacheRetriesAfterFailure(t *testing.T) {
 			http.Error(w, "busy", http.StatusTooManyRequests)
 			return
 		}
-		w.Write(buf.Bytes())
+		_, _ = w.Write(buf.Bytes())
 	}))
 	defer server.Close()
 
@@ -68,7 +68,7 @@ func TestThumbCacheStandsInWithSmallerSize(t *testing.T) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "w128-h128-l90-rj") {
-			w.Write(buf.Bytes())
+			_, _ = w.Write(buf.Bytes())
 			return
 		}
 		http.Error(w, "no", http.StatusNotFound)

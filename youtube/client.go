@@ -189,7 +189,7 @@ func (c *Client) ensureConfig(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("youtube: load Music configuration: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return responseError("load Music configuration", resp)
 	}
@@ -305,7 +305,7 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 	if err != nil {
 		return nil, fmt.Errorf("youtube: %s request: %w", endpoint, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, responseError(endpoint, resp)
 	}

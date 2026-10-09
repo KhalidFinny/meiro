@@ -100,9 +100,10 @@ func (s *macSession) Update(state State) {
 			info.Send(objc.Sel("setObject:forKey:"), number(state.Position.Seconds()), objc.NSString("elapsedPlaybackTime"))
 			rate := float64(0)
 			playbackState := 3 // MPNowPlayingPlaybackStateStopped
-			if state.Status == Playing {
+			switch state.Status {
+			case Playing:
 				rate, playbackState = 1, 1 // Playing
-			} else if state.Status == Paused {
+			case Paused:
 				playbackState = 2 // Paused
 			}
 			info.Send(objc.Sel("setObject:forKey:"), number(rate), objc.NSString("playbackRate"))

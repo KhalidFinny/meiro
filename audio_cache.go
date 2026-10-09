@@ -371,7 +371,7 @@ func downloadAudio(ctx context.Context, videoID, cacheDir, cookie string) (strin
 			_ = os.RemoveAll(tempDir)
 			return "", fmt.Errorf("prepare yt-dlp authentication: %w", err)
 		}
-		defer os.Remove(cookieFile)
+		defer func() { _ = os.Remove(cookieFile) }()
 		options = append(options, "--cookies", cookieFile)
 	}
 	args := audioCacheDownloadArgs(videoID, tempDir, options...)

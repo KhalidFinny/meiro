@@ -549,9 +549,10 @@ func (a *app) syncSystemMedia() {
 		}
 	}
 	loopStatus := "None"
-	if a.repeat == repeatTrack {
+	switch a.repeat {
+	case repeatTrack:
 		loopStatus = "Track"
-	} else if a.repeat == repeatQueue {
+	case repeatQueue:
 		loopStatus = "Playlist"
 	}
 	a.systemMedia.Update(systemmedia.State{

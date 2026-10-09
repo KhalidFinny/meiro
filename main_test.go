@@ -811,7 +811,9 @@ func TestArtworkColour(t *testing.T) {
 	}
 	grey := image.NewRGBA(image.Rect(0, 0, 8, 8))
 	data.Reset()
-	png.Encode(&data, grey)
+	if err := png.Encode(&data, grey); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := dominantColour(decoded(t, data.Bytes())); ok {
 		t.Errorf("a grey picture should have no dominant colour")
 	}

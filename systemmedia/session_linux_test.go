@@ -111,8 +111,12 @@ func TestMPRISSessionPublishesStateAndForwardsCommands(t *testing.T) {
 	}
 
 	for _, method := range []struct{ name, want string }{
-		{"Play", "play"}, {"Pause", "pause"}, {"PlayPause", "toggle"},
-		{"Stop", "stop"}, {"Next", "next"}, {"Previous", "previous"},
+		{"Play", "play"},
+		{"Pause", "pause"},
+		{"PlayPause", "toggle"},
+		{"Stop", "stop"},
+		{"Next", "next"},
+		{"Previous", "previous"},
 	} {
 		if err := object.Call(playerInterface+"."+method.name, 0).Err; err != nil {
 			t.Fatalf("call %s: %v", method.name, err)

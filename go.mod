@@ -2,7 +2,10 @@ module github.com/elianiva/meiro
 
 go 1.27.1
 
-tool github.com/egoist/mygo/cmd/mygo
+tool (
+	github.com/egoist/mygo/cmd/mygo
+	mvdan.cc/gofumpt
+)
 
 require (
 	github.com/dop251/goja v0.0.0-20261007200356-e2ea74d3d210
@@ -21,6 +24,10 @@ require (
 	github.com/go-text/typesetting v0.3.5 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/jfreymuth/pulse v0.1.3 // indirect
+	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/tools v0.49.0 // indirect
+	mvdan.cc/gofumpt v0.12.0 // indirect
 )

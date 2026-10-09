@@ -7,7 +7,7 @@
 # Platforms: darwin-arm64, darwin-amd64, linux-amd64, linux-arm64.
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
 platform="${1:?usage: fetch-tools.sh <darwin-arm64|darwin-amd64|linux-amd64|linux-arm64>}"
 

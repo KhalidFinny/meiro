@@ -88,8 +88,10 @@ func artists(names ...string) []youtube.MusicItem {
 	var items []youtube.MusicItem
 	for i, name := range names {
 		id := fmt.Sprintf("UCartist%d", i)
-		items = append(items, youtube.MusicItem{ID: id, BrowseID: id, Title: name, Kind: "music_item",
-			Subtitle: "2.4M subscribers", Thumbnail: "https://art.test/artist/" + name})
+		items = append(items, youtube.MusicItem{
+			ID: id, BrowseID: id, Title: name, Kind: "music_item",
+			Subtitle: "2.4M subscribers", Thumbnail: "https://art.test/artist/" + name,
+		})
 	}
 	return items
 }
@@ -121,7 +123,7 @@ func save(t *testing.T, tt *ui.Tester, name string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err := png.Encode(f, tt.Image()); err != nil {
 		t.Fatal(err)
 	}
@@ -269,11 +271,12 @@ func TestSnapshots(t *testing.T) {
 	tt.Frame()
 	save(t, tt, "narrow-queue")
 
-	a, tt = newShotApp("/home", false)
+	_, tt = newShotApp("/home", false)
 	tt.Move(380, 560)
 	tt.Frame()
 	save(t, tt, "home-hover")
 
-	a, tt = newShotApp("/library", true)
+	_, tt = newShotApp("/library", true)
+	tt.Frame()
 	save(t, tt, "library-signed-out")
 }

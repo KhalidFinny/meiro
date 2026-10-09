@@ -229,7 +229,7 @@ func (c *Client) OpenAudioStream(ctx context.Context, format AudioFormat) (*http
 		return nil, fmt.Errorf("youtube: open audio stream: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 		return nil, responseError("open audio stream", response)
 	}
 	return response, nil

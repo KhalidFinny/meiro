@@ -282,14 +282,14 @@ func (c *Client) ContinueSearch(ctx context.Context, token string) (*SearchResul
 }
 
 func (c *Client) GetArtist(ctx context.Context, artistID string) (*BrowseResult, error) {
-	if !(strings.HasPrefix(artistID, "UC") || strings.HasPrefix(artistID, "FEmusic_library_privately_owned_artist")) {
+	if !strings.HasPrefix(artistID, "UC") && !strings.HasPrefix(artistID, "FEmusic_library_privately_owned_artist") {
 		return nil, fmt.Errorf("youtube: invalid artist ID %q", artistID)
 	}
 	return c.browse(ctx, artistID)
 }
 
 func (c *Client) GetAlbum(ctx context.Context, albumID string) (*BrowseResult, error) {
-	if !(strings.HasPrefix(albumID, "MPR") || strings.HasPrefix(albumID, "FEmusic_library_privately_owned_release")) {
+	if !strings.HasPrefix(albumID, "MPR") && !strings.HasPrefix(albumID, "FEmusic_library_privately_owned_release") {
 		return nil, fmt.Errorf("youtube: invalid album ID %q", albumID)
 	}
 	return c.browse(ctx, albumID)
@@ -590,8 +590,7 @@ func upNextContinuationToken(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &root) != nil {
 		return ""
 	}
-	var tokenFromPanel func(map[string]any) string
-	tokenFromPanel = func(panel map[string]any) string {
+	tokenFromPanel := func(panel map[string]any) string {
 		if token, ok := panel["continuation"].(string); ok && token != "" {
 			return token
 		}

@@ -80,8 +80,10 @@ func (g *gallery) view(c *ui.Context) {
 			m3.SearchBar(c, m3.SearchSpec{Value: &g.query, Placeholder: "Search songs", Key: "s", MaxWidth: 520})
 		})
 		ui.Row(c).Gap(6).Children(func() {
-			for _, col := range []ui.Color{sc.Primary, sc.PrimaryContainer, sc.Secondary, sc.SecondaryContainer, sc.Tertiary, sc.TertiaryContainer,
-				sc.Error, sc.Surface, sc.SurfaceContainerLow, sc.SurfaceContainer, sc.SurfaceContainerHigh, sc.SurfaceContainerHighest, sc.OnSurface, sc.Outline} {
+			for _, col := range []ui.Color{
+				sc.Primary, sc.PrimaryContainer, sc.Secondary, sc.SecondaryContainer, sc.Tertiary, sc.TertiaryContainer,
+				sc.Error, sc.Surface, sc.SurfaceContainerLow, sc.SurfaceContainer, sc.SurfaceContainerHigh, sc.SurfaceContainerHighest, sc.OnSurface, sc.Outline,
+			} {
 				ui.Box(c).Size(52, 52).Radius(14).Background(col).Border(1, sc.OutlineVariant)
 			}
 		})
@@ -110,7 +112,12 @@ func TestGallery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		png.Encode(f, tt.Image())
-		f.Close()
+		if err := png.Encode(f, tt.Image()); err != nil {
+			_ = f.Close()
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
