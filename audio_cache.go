@@ -329,9 +329,11 @@ func audioCacheKey(videoID string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// audioCacheExtension accepts the containers yt-dlp saves an audio-only
+// format in: WebM audio arrives as .webm or .weba, MP4 audio as .m4a or .mp4.
 func audioCacheExtension(ext string) bool {
 	switch strings.ToLower(ext) {
-	case ".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm":
+	case ".aac", ".flac", ".m4a", ".mkv", ".mp3", ".mp4", ".ogg", ".opus", ".wav", ".weba", ".webm":
 		return true
 	default:
 		return false
@@ -385,9 +387,13 @@ func downloadAudio(ctx context.Context, videoID, cacheDir, cookie string) (strin
 	return "", errors.New("yt-dlp finished without an audio file")
 }
 
+// audioCacheDownloadArgs asks yt-dlp for the track's own audio stream. It
+// keeps that stream as it is: YouTube Music already serves Opus in WebM or
+// AAC in MP4, which the player reads, and re-encoding it through ffmpeg
+// would spend CPU and lose a generation of quality for nothing.
 func audioCacheDownloadArgs(videoID, tempDir string, options ...string) []string {
 	args := []string{
-		"-f", "bestaudio", "--extract-audio", "--audio-format", "mp3", "--audio-quality", "0", "--embed-metadata",
+		"-f", "bestaudio",
 		"--no-playlist", "--no-warnings", "--no-progress",
 		"-o", filepath.Join(tempDir, "audio.%(ext)s"),
 	}

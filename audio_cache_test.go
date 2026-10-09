@@ -9,11 +9,18 @@ import (
 	"time"
 )
 
-func TestAudioCacheDownloadsMP3(t *testing.T) {
+func TestAudioCacheDownloadsTheOriginalAudio(t *testing.T) {
 	args := audioCacheDownloadArgs("video-id", t.TempDir(), "--cookies", "cookies.txt")
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-f bestaudio --extract-audio --audio-format mp3 --audio-quality 0 --embed-metadata") {
-		t.Errorf("yt-dlp options do not request tagged, best-quality MP3 audio: %s", joined)
+	if !strings.Contains(joined, "-f bestaudio") {
+		t.Errorf("yt-dlp options do not request the best audio: %s", joined)
+	}
+	// The cache keeps what YouTube serves. Transcoding or remuxing it spends
+	// CPU and loses quality for metadata the player never reads.
+	for _, unwanted := range []string{"--extract-audio", "--audio-format", "--audio-quality", "--embed-metadata"} {
+		if strings.Contains(joined, unwanted) {
+			t.Errorf("yt-dlp still post-processes the cached audio (%s): %s", unwanted, joined)
+		}
 	}
 	if got := args[len(args)-1]; got != "https://music.youtube.com/watch?v=video-id" {
 		t.Errorf("yt-dlp URL = %q, want it after all options", got)

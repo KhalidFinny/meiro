@@ -277,21 +277,7 @@ func (p *Player) startLocked(url string, at time.Duration, paused bool) error {
 	}
 	p.stopLocked()
 
-	args := []string{
-		"-hide_banner", "-loglevel", "error", "-nostdin",
-		"-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-		"-user_agent", userAgent,
-	}
-	if at > 0 {
-		args = append(args, "-ss", strconv.FormatFloat(at.Seconds(), 'f', 3, 64))
-	}
-	args = append(args,
-		"-i", url,
-		"-vn", "-f", "s16le", "-acodec", "pcm_s16le",
-		"-ac", strconv.Itoa(channelCount), "-ar", strconv.Itoa(sampleRate),
-		"pipe:1",
-	)
-	cmd := exec.Command(ffmpeg, args...)
+	cmd := exec.Command(ffmpeg, streamArgs(url, at)...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("player: %w", err)
@@ -316,6 +302,30 @@ func (p *Player) startLocked(url string, at time.Duration, paused bool) error {
 	p.session = s
 	go p.reap(s)
 	return nil
+}
+
+// streamArgs is the ffmpeg command line that decodes url from at into signed
+// 16-bit stereo PCM on stdout. The reconnect and user-agent options belong to
+// the HTTP protocol, so a local file, which a cached track is, must not
+// receive them: ffmpeg refuses an option its protocol does not define and
+// plays nothing.
+func streamArgs(url string, at time.Duration) []string {
+	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
+	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+		args = append(args,
+			"-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+			"-user_agent", userAgent,
+		)
+	}
+	if at > 0 {
+		args = append(args, "-ss", strconv.FormatFloat(at.Seconds(), 'f', 3, 64))
+	}
+	return append(args,
+		"-i", url,
+		"-vn", "-f", "s16le", "-acodec", "pcm_s16le",
+		"-ac", strconv.Itoa(channelCount), "-ar", strconv.Itoa(sampleRate),
+		"pipe:1",
+	)
 }
 
 // reap waits for ffmpeg to exit and records how, then marks the session done.

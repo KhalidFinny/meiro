@@ -191,6 +191,8 @@ func (a *app) appendRecommendations(items []youtube.MusicItem) {
 		}
 		a.queue = append(a.queue, item)
 	}
+	// A recommended track can be the one that plays next, so warm it too.
+	a.warmNext()
 }
 
 // enqueue adds a track to the selected queue without changing the current
@@ -305,8 +307,24 @@ func (a *app) stream(item youtube.MusicItem) {
 				cache, videoID, cookie := a.currentAudioCache(), item.VideoID, cookie
 				a.run(func() { cache.enqueue(videoID, cookie) })
 			}
+			a.warmNext()
 		})
 	})
+}
+
+// warmNext starts the next queue track downloading while the current one
+// plays, so a play that follows opens a local file instead of waiting on the
+// network. It does nothing when the queue ends at the current track.
+func (a *app) warmNext() {
+	if a.index+1 >= len(a.queue) {
+		return
+	}
+	next := a.queue[a.index+1]
+	if next.VideoID == "" || next.VideoID == a.current.VideoID {
+		return
+	}
+	cache, cookie := a.currentAudioCache(), a.ytDlpCookie
+	a.run(func() { cache.enqueue(next.VideoID, cookie) })
 }
 
 // setAudioCacheLimit changes the number of recently played audio files kept

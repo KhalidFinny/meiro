@@ -183,3 +183,29 @@ func TestStopDoesNotWaitForAStalledStream(t *testing.T) {
 		t.Fatal("Stop is waiting for ffmpeg")
 	}
 }
+
+// ffmpeg's reconnect and user-agent options belong to the HTTP protocol. A
+// cached track is a local file, and ffmpeg refuses to open an input when it
+// is given an option its protocol does not define, so a cached track used to
+// play nothing at all.
+func TestStreamArgsOnlySendHTTPOptionsToHTTPURLs(t *testing.T) {
+	local := streamArgs("/Users/me/Meiro Audio Cache/abc.webm", 0)
+	for _, arg := range local {
+		switch arg {
+		case "-reconnect", "-reconnect_streamed", "-reconnect_delay_max", "-user_agent":
+			t.Errorf("a local file was given the HTTP option %s: %v", arg, local)
+		}
+	}
+	remote := streamArgs("https://media.example/videoplayback?id=1", 0)
+	joined := strings.Join(remote, " ")
+	for _, want := range []string{"-reconnect 1", "-reconnect_streamed 1", "-reconnect_delay_max 5", "-user_agent"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("an HTTP stream did not get %q: %v", want, remote)
+		}
+	}
+	// Seeking a local file still works: -ss is an input option, before -i.
+	seeking := strings.Join(streamArgs("/tmp/track.webm", 90*time.Second), " ")
+	if !strings.Contains(seeking, "-ss 90.000") || !strings.Contains(seeking, "-i /tmp/track.webm") {
+		t.Errorf("a seek on a local file lost its offset or input: %s", seeking)
+	}
+}
