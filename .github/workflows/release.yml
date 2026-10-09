@@ -1,65 +1,97 @@
 name: Release
 
-# Publish a GitHub release for a tag such as v0.2.0. It runs only after the
-# CI workflow passes on that tag's commit, so no release builds from
-# unchecked code. Run it by hand to build without publishing.
+# Push a tag such as v0.2.0 to build the app for every platform and publish
+# it as a GitHub release. It builds only after a CI run already passed on
+# the tag's commit, so no release builds from unchecked code. Triggering
+# only on tags keeps these expensive platform builds off every branch push
+# and pull request. Run it by hand on a tag to retry after CI turns green,
+# or on a branch to build without publishing.
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
+  push:
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  # Refuse to build unless the CI run that triggered this tested the exact
-  # commit a version tag points at. Any other CI completion (a branch push,
-  # a pull request) ends here with nothing to release.
+  # The pushed tag names the release. A manual run on a tag retries that
+  # release; a manual run on a branch builds without publishing.
   gate:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-      version: ${{ steps.tag.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
-      - name: Resolve the tested commit
+      - name: Resolve the tag and commit
         id: resolve
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual run: building without publishing."
-            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.ref_type }}" = "tag" ]; then
+              tag="${{ github.ref_name }}"
+              echo "Manual retry for $tag."
+            else
+              echo "Manual run on ${{ github.ref_name }}: building without publishing."
+              echo "tag=" >> "$GITHUB_OUTPUT"
+              echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+              echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           else
-            echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+            tag="${{ github.ref_name }}"
           fi
+          case "$tag" in
+            v*) ;;
+            *) echo "Not a version tag: $tag"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag"
       - uses: actions/checkout@v5
         with:
           ref: ${{ steps.resolve.outputs.sha }}
           fetch-depth: 0
-      - name: Find the version tag on the tested commit
-        id: tag
+      - name: Confirm the tag points at the release commit
+        if: steps.resolve.outputs.tag != ''
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=" >> "$GITHUB_OUTPUT"
-            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          tags="$(git tag --points-at HEAD --list 'v*')"
-          count="$(echo "$tags" | grep -c . || true)"
-          if [ "$count" = "0" ]; then
-            echo "No version tag on ${{ steps.resolve.outputs.sha }}; nothing to release."
-            echo "tag=" >> "$GITHUB_OUTPUT"
-            echo "version=" >> "$GITHUB_OUTPUT"
-          elif [ "$count" != "1" ]; then
-            echo "Several version tags point at this commit; refusing an ambiguous release:"
-            echo "$tags"
+          test "$(git tag --points-at HEAD --list '${{ steps.resolve.outputs.tag }}')" = "${{ steps.resolve.outputs.tag }}" || {
+            echo "Tag ${{ steps.resolve.outputs.tag }} does not point at ${{ steps.resolve.outputs.sha }}."
             exit 1
-          else
-            echo "tag=$tags" >> "$GITHUB_OUTPUT"
-            echo "version=${tags#v}" >> "$GITHUB_OUTPUT"
-            echo "Releasing $tags"
-          fi
+          }
+      # The tag's commit already passed CI as a branch push (tag pushes
+      # skip CI), so wait for that CI run instead of rebuilding unchecked
+      # code. This polls because the tag can land before CI finishes.
+      - name: Wait for CI to pass on the release commit
+        if: steps.resolve.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          sha="${{ steps.resolve.outputs.sha }}"
+          echo "Waiting for a successful CI run on $sha..."
+          for i in $(seq 1 60); do
+            data="$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$sha&per_page=20")"
+            if echo "$data" | jq -e '[.workflow_runs[] | select(.conclusion == "success")] | length > 0' >/dev/null; then
+              echo "CI passed on $sha."
+              exit 0
+            fi
+            if echo "$data" | jq -e '[.workflow_runs[] | select(.status != "completed")] | length > 0' >/dev/null; then
+              echo "Attempt $i: CI still running; waiting 60s..."
+            elif echo "$data" | jq -e '.workflow_runs | length == 0' >/dev/null; then
+              echo "Attempt $i: no CI run yet; waiting 60s..."
+            else
+              echo "CI did not pass on $sha; refusing to release."
+              exit 1
+            fi
+            sleep 60
+          done
+          echo "Timed out waiting for CI on $sha."
+          exit 1
 
   version:
     needs: gate
@@ -79,7 +111,10 @@ jobs:
           echo "Version OK: ${{ needs.gate.outputs.version }}"
 
   build:
+    # A tag build waits on version (tag matches mygo.json); a manual
+    # branch build skips version, so it always runs and never publishes.
     needs: [gate, version]
+    if: always() && needs.gate.result == 'success' && (needs.version.result == 'success' || needs.version.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:

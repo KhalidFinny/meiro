@@ -1,12 +1,12 @@
 # Checks every change before it can release. Each check runs as its own
-# job, so they all run at the same time, and the release workflow waits
-# for all of them through the checks gate below.
+# job, so they all run at the same time. Tag pushes skip this workflow:
+# the release workflow only builds a tag whose commit already passed here
+# as a branch push, so re-checking the same commit would waste CI time.
 name: CI
 
 on:
   push:
     branches: ["master"]
-    tags: ["v*"]
   pull_request:
 
 permissions:
@@ -112,9 +112,11 @@ jobs:
           tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
           "$RUNNER_TEMP/actionlint" -color
 
-  # One gate for branch protection and the release workflow. It passes
-  # only when every check above passes, so a new check guards releases
-  # as soon as it is added to needs.
+  # One gate for branch protection. It passes only when every check above
+  # passes, so a new check guards the main branch as soon as it is added
+  # to needs. The release workflow does not use this gate directly: tag
+  # pushes skip CI, and the release gate polls the API for a successful
+  # CI run on the tag's commit instead.
   checks:
     if: always()
     needs: [format, tidy, vet, lint, cross-compile, test, scripts]
