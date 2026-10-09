@@ -58,6 +58,7 @@ func (a *app) playWithOptions(item youtube.MusicItem, queue []youtube.MusicItem,
 // invalidates any request that belongs to the previous selection.
 func (a *app) resetUpNext(options youtube.UpNextOptions, source string) {
 	a.upNextGeneration++
+	a.playNextID = ""
 	a.upNextOptions = options
 	a.upNextLoading = false
 	a.upNextFetched = false
@@ -189,6 +190,44 @@ func (a *app) appendRecommendations(items []youtube.MusicItem) {
 			a.recommendationStart = len(a.queue)
 		}
 		a.queue = append(a.queue, item)
+	}
+}
+
+// enqueue adds a track to the selected queue without changing the current
+// track. User-selected tracks stay ahead of autoplay recommendations.
+func (a *app) enqueue(item youtube.MusicItem, playNext bool) {
+	if item.VideoID == "" {
+		return
+	}
+	if a.current.VideoID == "" || len(a.queue) == 0 {
+		a.playWithOptions(item, []youtube.MusicItem{item}, 0, youtube.UpNextOptions{}, "Queue")
+		a.notice = "Playing " + item.Title
+		return
+	}
+
+	position := len(a.queue)
+	if a.recommendationStart >= 0 {
+		position = a.recommendationStart
+	}
+	if playNext {
+		position = a.index + 1
+	}
+	position = min(max(position, 0), len(a.queue))
+	a.queue = slices.Insert(a.queue, position, item)
+	if position <= a.index {
+		a.index++
+	}
+	if a.recommendationStart >= 0 && position <= a.recommendationStart {
+		a.recommendationStart++
+	}
+	if playNext {
+		a.playNextID = item.VideoID
+		if !a.settings.AutoPlay && a.recommendationStart >= 0 && position >= a.recommendationStart {
+			a.recommendationStart = position + 1
+		}
+		a.notice = item.Title + " will play next"
+	} else {
+		a.notice = "Added " + item.Title + " to the queue"
 	}
 }
 
@@ -458,6 +497,9 @@ func parseDuration(text string) time.Duration {
 // its end when autoplay is on.
 func (a *app) advance() {
 	if next, ok := a.nextIndex(); ok {
+		if a.queue[next].VideoID == a.playNextID {
+			a.playNextID = ""
+		}
 		a.index = next
 		a.start(a.queue[a.index])
 		return

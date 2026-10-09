@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -193,12 +194,15 @@ func artRadius(item youtube.MusicItem, square float32) float32 {
 func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicItem) {
 	sc := m3.Active().Scheme
 	kind, _ := targetOf(item)
-	card := ui.ButtonBase(c.Key(itemKey("card", item)))
+	key := itemKey("card", item)
+	card := ui.ButtonBase(c.Key(key))
 	hovered := card.Hovered()
 	card.Column().AlignItems(ui.Start).Width(cardWidth).Shrink(0).Padding(8).Gap(10).Radius(m3.ExtraLarge).Cursor(ui.CursorPointer).
 		Background(m3.Layer(sc.Surface, sc.OnSurface, hoverOpacity(hovered || card.FocusVisible()))).
 		Label(item.Title)
-	played := false
+	played, menuClicked := false, false
+	var menuButton ui.Element
+	hasMenu := false
 	card.Children(func() {
 		radius := artRadius(item, m3.LargeIncreased)
 		opening := a.opening == itemKey("open", item)
@@ -213,14 +217,21 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 				})
 				return
 			}
-			if !hovered || (kind != pageTrack && kind != pageAlbum && kind != pagePlaylist) {
-				return
+			if hovered || card.FocusVisible() || a.trackMenuOpen && a.trackMenuKey == key+"-menu" {
+				if kind != "" {
+					menuButton = m3.IconButton(c, m3.IconButtonSpec{
+						Icon: m3.IconMore, Label: "More options for " + item.Title, Key: key + "-menu",
+					}).Attach(ui.AnchorTopRight, ui.AnchorTopRight).Top(8).Right(8)
+					hasMenu = true
+				}
 			}
-			fab := m3.FAB(c, m3.FABSpec{Icon: m3.IconPlay, Size: m3.FABSmall, Tone: m3.FABPrimary, Key: "play"}).
-				Attach(ui.AnchorBottomRight, ui.AnchorBottomRight).Right(8).Bottom(8)
-			fab.Transition(ui.ElementTransition{Enter: &ui.Motion{Y: 8}, Duration: m3.SpatialFast.Duration(), Ease: m3.SpatialFast.Ease()})
-			if fab.Clicked() {
-				played = true
+			if hovered && (kind == pageTrack || kind == pageAlbum || kind == pagePlaylist) {
+				fab := m3.FAB(c, m3.FABSpec{Icon: m3.IconPlay, Size: m3.FABSmall, Tone: m3.FABPrimary, Key: "play"}).
+					Attach(ui.AnchorBottomRight, ui.AnchorBottomRight).Right(8).Bottom(8)
+				fab.Transition(ui.ElementTransition{Enter: &ui.Motion{Y: 8}, Duration: m3.SpatialFast.Duration(), Ease: m3.SpatialFast.Ease()})
+				if fab.Clicked() {
+					played = true
+				}
 			}
 		})
 		m3.EmphasizedText(c, m3.TitleSmall, item.Title).SingleLine().TextColor(sc.OnSurface).Margin(0, 4)
@@ -228,12 +239,58 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 			m3.Text(c, m3.BodySmall, item.Subtitle).SingleLine().TextColor(sc.OnSurfaceVariant).Margin(-6, 4, 0)
 		}
 	})
+	if hasMenu && menuButton.Clicked() {
+		a.trackMenuKey, a.trackMenuOpen = key+"-menu", true
+		menuClicked = true
+	}
+	if hasMenu && a.trackMenuKey == key+"-menu" {
+		a.cardMenu(c, menuButton, key+"-menu", item, queue)
+	}
 	switch {
+	case menuClicked:
+		// The card's button also receives this pointer event. Opening its menu
+		// must not activate the card underneath it.
 	case played:
 		a.playCollection(item)
 	case card.Clicked():
 		a.activate(item, queue)
 	}
+}
+
+// cardMenu offers actions that make sense for a card. Songs share their
+// queue and artist actions with song rows; other cards can open their page or
+// copy its link.
+func (a *app) cardMenu(c *ui.Context, anchor ui.Element, key string, item youtube.MusicItem, queue []youtube.MusicItem) {
+	if a.trackMenuKey != key {
+		return
+	}
+	if kind, _ := targetOf(item); kind == pageTrack {
+		a.songMenu(c, anchor, key, item)
+		return
+	}
+	m3.Menu(c, anchor, &a.trackMenuOpen, 232, func() {
+		close := func() { a.trackMenuOpen = false }
+		kind, id := targetOf(item)
+		label := ""
+		icon := m3.IconChevronRight
+		switch kind {
+		case pageAlbum:
+			label, icon = "Open album", m3.IconAlbum
+		case pagePlaylist:
+			label, icon = "Open playlist", m3.IconQueue
+		case pageArtist:
+			label, icon = "Go to artist", m3.IconPerson
+		}
+		if label != "" && m3.MenuItem(c, label, icon).Clicked() {
+			a.activate(item, queue)
+			close()
+		}
+		if id != "" && m3.MenuItem(c, "Copy link", m3.IconCopy).Clicked() {
+			c.WriteClipboard("https://music.youtube.com/browse/" + url.PathEscape(id))
+			c.Toast("Link copied")
+			close()
+		}
+	})
 }
 
 // songOptions shape a row of a song.
@@ -255,72 +312,91 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 	kind, _ := targetOf(item)
 	isSong := kind == pageTrack
 	playing := isSong && item.VideoID == a.current.VideoID
-	row := ui.ButtonBase(c.Key(itemKey("song", item) + strconv.Itoa(o.number)))
-	hovered := row.Hovered()
+	key := itemKey("song", item) + strconv.Itoa(o.number)
+	row := ui.Row(c.Key(key))
+	row.Height(rowHeight).Shrink(0).Padding(8, 8).Gap(4).AlignItems(ui.Center).Radius(m3.Large)
+	if o.inset {
+		row.Margin(0, pageGutter-8)
+	}
 	container := ui.Transparent
 	if playing {
 		container = sc.SecondaryContainer
 	}
-	row.Height(rowHeight).Shrink(0).Padding(8, 16, 8, 8).Gap(12).AlignItems(ui.Center).Radius(m3.Large).
-		Cursor(ui.CursorPointer).Label(item.Title).
-		Background(m3.StateFill(container, sc.OnSurface, hovered && !playing, row.Pressed(), row.FocusVisible()))
-	if o.inset {
-		row.Margin(0, pageGutter-8)
-	}
+	var main, menuButton ui.Element
+	hasMenu := false
 	row.Children(func() {
-		titleColour, subColour := sc.OnSurface, sc.OnSurfaceVariant
-		if playing {
-			titleColour, subColour = sc.OnSecondaryContainer, sc.OnSecondaryContainer.Alpha(0.8)
-		}
-		if o.number > 0 {
-			ui.Row(c).Size(48, 48).Shrink(0).Center().Children(func() {
-				switch {
-				case playing && a.loading():
-					m3.LoadingIndicatorIn(c, 24, sc.Primary)
-				case playing:
-					m3.Equalizer(c, 18, a.player.Playing(), sc.Primary)
-				case hovered && isSong:
-					ui.Icon(c, m3.IconPlay).FontSize(24).TextColor(sc.OnSurface)
-				default:
-					m3.Text(c, m3.BodyLarge, strconv.Itoa(o.number)).TextColor(sc.OnSurfaceVariant)
-				}
-			})
-		} else {
-			m3.Art(c, a.thumbs.bitmap(item.Thumbnail, 128), 48, artRadius(item, m3.Medium), func() {
-				if isSong && (playing || hovered) {
-					ui.Box(c).Fill().Center().Background(sc.Scrim.Alpha(0.45)).Children(func() {
-						if playing && a.loading() {
-							m3.LoadingIndicatorIn(c, 24, ui.RGB(255, 255, 255))
-						} else if playing {
-							m3.Equalizer(c, 18, a.player.Playing(), ui.RGB(255, 255, 255))
-						} else {
-							ui.Icon(c, m3.IconPlay).FontSize(24).TextColor(ui.RGB(255, 255, 255))
-						}
-					})
-				}
-				if isVideo(item) {
-					m3.VideoBadge(c, 48)
-				}
-			})
-		}
-		ui.Column(c).Grow(1).MinWidth(0).Gap(0).Children(func() {
-			title := m3.Text(c, m3.BodyLarge, item.Title).SingleLine().TextColor(titleColour)
+		main = ui.ButtonBase(c.Key(key + "-activate"))
+		hovered := row.Hovered()
+		main.Grow(1).Basis(0).MinWidth(0).Height(rowHeight - 16).PaddingX(8).Gap(12).AlignItems(ui.Center).
+			Radius(m3.Large).Cursor(ui.CursorPointer).Label(item.Title).Background(ui.Transparent)
+		row.Background(m3.StateFill(container, sc.OnSurface, hovered && !playing, main.Pressed(), main.FocusVisible()))
+		main.Children(func() {
+			titleColour, subColour := sc.OnSurface, sc.OnSurfaceVariant
 			if playing {
-				title.FontWeight(600)
+				titleColour, subColour = sc.OnSecondaryContainer, sc.OnSecondaryContainer.Alpha(0.8)
 			}
-			if item.Subtitle != "" {
-				m3.Text(c, m3.BodyMedium, item.Subtitle).SingleLine().TextColor(subColour)
+			if o.number > 0 {
+				ui.Row(c).Size(48, 48).Shrink(0).Center().Children(func() {
+					switch {
+					case playing && a.loading():
+						m3.LoadingIndicatorIn(c, 24, sc.Primary)
+					case playing:
+						m3.Equalizer(c, 18, a.player.Playing(), sc.Primary)
+					case hovered && isSong:
+						ui.Icon(c, m3.IconPlay).FontSize(24).TextColor(sc.OnSurface)
+					default:
+						m3.Text(c, m3.BodyLarge, strconv.Itoa(o.number)).TextColor(sc.OnSurfaceVariant)
+					}
+				})
+			} else {
+				m3.Art(c, a.thumbs.bitmap(item.Thumbnail, 128), 48, artRadius(item, m3.Medium), func() {
+					if isSong && (playing || hovered) {
+						ui.Box(c).Fill().Center().Background(sc.Scrim.Alpha(0.45)).Children(func() {
+							if playing && a.loading() {
+								m3.LoadingIndicatorIn(c, 24, ui.RGB(255, 255, 255))
+							} else if playing {
+								m3.Equalizer(c, 18, a.player.Playing(), ui.RGB(255, 255, 255))
+							} else {
+								ui.Icon(c, m3.IconPlay).FontSize(24).TextColor(ui.RGB(255, 255, 255))
+							}
+						})
+					}
+					if isVideo(item) {
+						m3.VideoBadge(c, 48)
+					}
+				})
+			}
+			ui.Column(c).Grow(1).MinWidth(0).Gap(0).Children(func() {
+				title := m3.Text(c, m3.BodyLarge, item.Title).SingleLine().TextColor(titleColour)
+				if playing {
+					title.FontWeight(600)
+				}
+				if item.Subtitle != "" {
+					m3.Text(c, m3.BodyMedium, item.Subtitle).SingleLine().TextColor(subColour)
+				}
+			})
+			switch {
+			case item.Duration != "":
+				m3.Text(c, m3.BodyMedium, item.Duration).SingleLine().Width(48).TextAlign(ui.End).
+					TextColor(subColour).Shrink(0).FontFeatures("tnum")
+			case !isSong:
+				ui.Icon(c, m3.IconChevronRight).FontSize(24).TextColor(sc.OnSurfaceVariant)
 			}
 		})
-		switch {
-		case item.Duration != "":
-			m3.Text(c, m3.BodyMedium, item.Duration).SingleLine().Width(48).TextAlign(ui.End).
-				TextColor(subColour).Shrink(0).FontFeatures("tnum")
-		case !isSong:
-			ui.Icon(c, m3.IconChevronRight).FontSize(24).TextColor(sc.OnSurfaceVariant)
+		if isSong && (hovered || main.FocusVisible() || a.trackMenuOpen && a.trackMenuKey == key) {
+			menuButton = m3.IconButton(c, m3.IconButtonSpec{
+				Icon: m3.IconMore, Label: "More options for " + item.Title, Key: key + "-menu",
+			})
+			hasMenu = true
 		}
 	})
-	if row.Clicked() {
+	if hasMenu && menuButton.Clicked() {
+		a.trackMenuKey, a.trackMenuOpen = key, true
+	}
+	if hasMenu && a.trackMenuKey == key {
+		a.songMenu(c, menuButton, key, item)
+	}
+	if main.Clicked() {
 		if o.directQueue {
 			index := 0
 			for i := range queue {
@@ -334,6 +410,44 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 			a.activate(item, queue)
 		}
 	}
+}
+
+// songMenu offers local queue actions and read-only actions for a track.
+func (a *app) songMenu(c *ui.Context, anchor ui.Element, key string, item youtube.MusicItem) {
+	if a.trackMenuKey != key {
+		return
+	}
+	m3.Menu(c, anchor, &a.trackMenuOpen, 232, func() {
+		close := func() { a.trackMenuOpen = false }
+		if artistID := artistID(item); artistID != "" {
+			if m3.MenuItem(c, "Go to artist", m3.IconPerson).Clicked() {
+				path := "/artist/" + url.PathEscape(artistID)
+				a.details[path] = detail{kind: pageArtist}
+				a.router.Push(path)
+				close()
+			}
+		}
+		if m3.MenuItem(c, "Play next", m3.IconNext).Clicked() {
+			a.enqueue(item, true)
+			close()
+		}
+		if m3.MenuItem(c, "Add to queue", m3.IconQueue).Clicked() {
+			a.enqueue(item, false)
+			close()
+		}
+		if m3.MenuItem(c, "Copy link", m3.IconCopy).Clicked() {
+			c.WriteClipboard("https://music.youtube.com/watch?v=" + url.QueryEscape(item.VideoID))
+			c.Toast("Link copied")
+			close()
+		}
+	})
+}
+
+func artistID(item youtube.MusicItem) string {
+	if item.VideoID != "" && (strings.HasPrefix(item.BrowseID, "UC") || strings.Contains(item.BrowseID, "privately_owned_artist")) {
+		return item.BrowseID
+	}
+	return ""
 }
 
 // hero is the heading of an album, a playlist or an artist: its artwork large

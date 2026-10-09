@@ -238,26 +238,37 @@ func (a *app) nowPlayingMain(c *ui.Context, windowHeight float32) {
 	if windowHeight < 700 {
 		art := min(max(windowHeight-200, 160), 320)
 		ui.Row(c).Grow(1).MinWidth(0).Center().Gap(28).Children(func() {
-			artwork := m3.Art(c, a.thumbs.bitmap(a.current.Thumbnail, 512), art, m3.ExtraLarge, func() {
-				if isVideo(a.current) {
-					m3.VideoBadge(c, art)
-				}
-			})
-			m3.Elevation(artwork, 3)
+			a.nowPlayingArtwork(c, 512, art, m3.ExtraLarge)
 			ui.Column(c).Grow(1).MinWidth(260).MaxWidth(420).Gap(10).Children(controls)
 		})
 		return
 	}
 	art := min(max(windowHeight-420, 300), 440)
 	ui.Column(c).Grow(1).MinWidth(0).Center().Gap(20).Children(func() {
-		artwork := m3.Art(c, a.thumbs.bitmap(a.current.Thumbnail, 640), art, m3.ExtraLargeInc+8, func() {
-			if isVideo(a.current) {
-				m3.VideoBadge(c, art)
-			}
-		})
-		m3.Elevation(artwork, 3)
+		a.nowPlayingArtwork(c, 640, art, m3.ExtraLargeInc+8)
 		ui.Column(c).Width(art).Gap(14).Children(controls)
 	})
+}
+
+// nowPlayingArtwork shows the cover with its video badge and track menu.
+func (a *app) nowPlayingArtwork(c *ui.Context, imageSize int, artSize, radius float32) {
+	key := itemKey("now-playing-menu", a.current)
+	var menuButton ui.Element
+	artwork := m3.Art(c, a.thumbs.bitmap(a.current.Thumbnail, imageSize), artSize, radius, func() {
+		if isVideo(a.current) {
+			m3.VideoBadge(c, artSize)
+		}
+		menuButton = m3.IconButton(c, m3.IconButtonSpec{
+			Icon: m3.IconMore, Label: "More options for " + a.current.Title, Key: key + "-button",
+		}).Attach(ui.AnchorTopRight, ui.AnchorTopRight).Top(8).Right(8)
+	})
+	m3.Elevation(artwork, 3)
+	if menuButton.Clicked() {
+		a.trackMenuKey, a.trackMenuOpen = key, true
+	}
+	if a.trackMenuKey == key {
+		a.songMenu(c, menuButton, key, a.current)
+	}
 }
 
 // sidePanel holds the queue, lyrics and related songs under tabs, on a tonal card.

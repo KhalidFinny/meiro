@@ -1157,6 +1157,42 @@ func cardArtistBrowseID(renderer map[string]any) string {
 	return ""
 }
 
+// rendererArtistBrowseID reads an artist browse endpoint from a track's
+// subtitle or second flex column, without treating album links as artists.
+func rendererArtistBrowseID(renderer map[string]any) string {
+	if id := artistBrowseEndpoint(renderer["subtitle"]); id != "" {
+		return id
+	}
+	columns, ok := renderer["flexColumns"].([]any)
+	if !ok || len(columns) < 2 {
+		return ""
+	}
+	return artistBrowseEndpoint(columns[1])
+}
+
+func artistBrowseEndpoint(value any) string {
+	switch node := value.(type) {
+	case []any:
+		for _, child := range node {
+			if id := artistBrowseEndpoint(child); id != "" {
+				return id
+			}
+		}
+	case map[string]any:
+		if endpoint, ok := node["browseEndpoint"].(map[string]any); ok {
+			if id, _ := endpoint["browseId"].(string); strings.HasPrefix(id, "UC") || strings.Contains(id, "privately_owned_artist") {
+				return id
+			}
+		}
+		for _, key := range sortedKeys(node) {
+			if id := artistBrowseEndpoint(node[key]); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
 // trailingDuration reads a track length from the end of a card's subtitle,
 // where it trails the artist as "Video • Artist • 8.4M views • 2:05".
 func trailingDuration(subtitle string) string {
@@ -1222,6 +1258,11 @@ func parseMusicItem(kind string, renderer map[string]any, keep bool) MusicItem {
 	}
 	item.PlaylistID, _ = renderer["playlistId"].(string)
 	item.BrowseID = navigationID(renderer["navigationEndpoint"])
+	if kind == "track" || kind == "video" {
+		if artistID := rendererArtistBrowseID(renderer); artistID != "" {
+			item.BrowseID = artistID
+		}
+	}
 	if item.VideoID != "" {
 		item.ID = item.VideoID
 	} else if item.BrowseID != "" {

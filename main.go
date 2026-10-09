@@ -103,8 +103,10 @@ type app struct {
 	detail  detail
 	details map[string]detail
 	// carousels keep the scroll of each shelf.
-	carousels map[string]*m3.CarouselState
-	menuOpen  bool
+	carousels     map[string]*m3.CarouselState
+	menuOpen      bool
+	trackMenuOpen bool
+	trackMenuKey  string
 
 	// The full-screen player, and what its side panel shows.
 	npOpen      bool
@@ -124,6 +126,7 @@ type app struct {
 	// recommendationStart marks the first generated track in queue; tracks
 	// before it came from the user's selected page or playlist.
 	recommendationStart int
+	playNextID          string
 	queueSource         string
 	upNextOptions       youtube.UpNextOptions
 	upNextGeneration    int
@@ -497,6 +500,13 @@ func (a *app) nextIndex() (int, bool) {
 	limit := len(a.queue)
 	if !a.settings.AutoPlay && a.recommendationStart >= 0 {
 		limit = a.recommendationStart
+	}
+	if a.playNextID != "" {
+		for i := max(a.index+1, 0); i < len(a.queue); i++ {
+			if a.queue[i].VideoID == a.playNextID {
+				return i, true
+			}
+		}
 	}
 	switch {
 	case limit == 0 || (!a.settings.AutoPlay && a.recommendationStart >= 0 && a.index >= limit):

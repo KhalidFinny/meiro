@@ -360,6 +360,17 @@ func TestSearchKeepsItsTopCardResult(t *testing.T) {
 	}
 }
 
+func TestTrackReadsArtistBrowseIDFromItsSubtitle(t *testing.T) {
+	var renderer map[string]any
+	if err := json.Unmarshal([]byte(`{"videoId":"track-1","flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"simpleText":"Track"}}},{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Album","navigationEndpoint":{"browseEndpoint":{"browseId":"MPRalbum"}}},{"text":" • "},{"text":"Artist","navigationEndpoint":{"browseEndpoint":{"browseId":"UCartist"}}}]}}}]}`), &renderer); err != nil {
+		t.Fatal(err)
+	}
+	item := parseMusicItem("track", renderer, false)
+	if item.BrowseID != "UCartist" {
+		t.Errorf("track artist browse ID = %q, want UCartist", item.BrowseID)
+	}
+}
+
 func TestUpNextIgnoresItsMixQueueID(t *testing.T) {
 	// A queue entry names both its track and the mix offered beside it. The
 	// queue ID must not become the track's destination: opening it browses

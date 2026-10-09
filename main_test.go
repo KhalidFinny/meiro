@@ -131,6 +131,48 @@ func TestOpeningAnAlbumFromTheHomePage(t *testing.T) {
 	}
 }
 
+func TestAlbumCardMenuCopiesItsLinkWithoutOpeningTheCard(t *testing.T) {
+	a := newTestApp()
+	a.location = "/home"
+	a.feed = pageState{sections: []youtube.MusicSection{{
+		Title: "Listen again",
+		Items: []youtube.MusicItem{{
+			ID: "MPREb_focus", BrowseID: "MPREb_focus", Title: "Deep Focus", Kind: "music_item",
+			Subtitle: "Album • Aurora Vale",
+		}},
+	}}}
+	tt := ui.NewTester(a.view, 1180, 850)
+	if _, ok := tt.Find("More options for Deep Focus"); ok {
+		t.Fatal("album card menu is visible before hover")
+	}
+	r, ok := tt.Find("Deep Focus")
+	if !ok {
+		t.Fatalf("album card is not visible: %q", tt.Texts())
+	}
+	tt.Move(r.X+r.W/2, r.Y+r.H/2)
+	tt.Frame()
+	if err := tt.Click("More options for Deep Focus"); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"Open album", "Copy link"} {
+		if !tt.HasText(label) {
+			t.Errorf("album card menu is missing %q: %q", label, tt.Texts())
+		}
+	}
+	if tt.HasText("Add to playlist") {
+		t.Fatal("album card menu unexpectedly offers playlist editing")
+	}
+	if got := a.router.Path(); got != "/home" {
+		t.Fatalf("opening the card menu activated the album: route = %q", got)
+	}
+	if err := tt.Click("Copy link"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tt.Clipboard(), "https://music.youtube.com/browse/MPREb_focus"; got != want {
+		t.Fatalf("copied album link = %q, want %q", got, want)
+	}
+}
+
 func TestPlaylistListsAndQueuesVideoEntries(t *testing.T) {
 	a := newTestApp()
 	path := "/playlist/VLPL_video"
@@ -204,6 +246,33 @@ func TestPlayerBarShowsTheCurrentTrack(t *testing.T) {
 	tt.Key(0, ui.KeyEscape)
 	if a.npOpen {
 		t.Errorf("Escape did not close the full-screen player")
+	}
+}
+
+func TestNowPlayingArtworkOpensTrackActions(t *testing.T) {
+	a := newTestApp()
+	a.current = youtube.MusicItem{
+		ID: "now-playing", VideoID: "now-playing", BrowseID: "UCartist",
+		Title: "Now playing song", Subtitle: "Aurora Vale", Kind: "track",
+	}
+	a.queue = []youtube.MusicItem{a.current, {VideoID: "later", Title: "Later song"}}
+	a.location = "/home"
+	a.npOpen = true
+	tt := ui.NewTester(a.view, 1180, 760)
+	menuButton := "More options for Now playing song"
+	if err := tt.Click(menuButton); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"Go to artist", "Play next", "Add to queue", "Copy link"} {
+		if !tt.HasText(label) {
+			t.Errorf("playback menu is missing %q: %q", label, tt.Texts())
+		}
+	}
+	if err := tt.Click("Copy link"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tt.Clipboard(), "https://music.youtube.com/watch?v=now-playing"; got != want {
+		t.Fatalf("copied playback link = %q, want %q", got, want)
 	}
 }
 
@@ -281,6 +350,111 @@ func TestRelatedTabShowsRelatedTracks(t *testing.T) {
 	tt := ui.NewTester(a.view, 1180, 760)
 	if !tt.HasText("Related") || !tt.HasText("Related song") {
 		t.Fatalf("related tab did not show its tracks: %q", tt.Texts())
+	}
+}
+
+func TestTrackMenuQueuesCopiesAndOpensTheArtist(t *testing.T) {
+	a := newTestApp()
+	track := youtube.MusicItem{
+		ID: "picked", VideoID: "picked", BrowseID: "UCartist",
+		Title: "Picked track", Subtitle: "Aurora Vale", Kind: "track", Duration: "3:20",
+	}
+	a.feed.sections = []youtube.MusicSection{{Title: "Songs", Items: []youtube.MusicItem{
+		track,
+		{ID: "second", VideoID: "second", Title: "Second track", Kind: "track", Duration: "3:10"},
+		{ID: "third", VideoID: "third", Title: "Third track", Kind: "track", Duration: "2:50"},
+	}}}
+	a.location = "/home"
+	a.current = youtube.MusicItem{ID: "current", VideoID: "current", Title: "Current track"}
+	a.queue = []youtube.MusicItem{a.current, {ID: "later", VideoID: "later", Title: "Later track"}}
+	tt := ui.NewTester(a.view, 1000, 700)
+	menuButton := "More options for Picked track"
+	hoverTrack := func() {
+		r, ok := tt.Find("Picked track")
+		if !ok {
+			t.Fatal("track row is not visible")
+		}
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Frame()
+	}
+	hoverTrack()
+	if err := tt.Click(menuButton); err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"Go to artist", "Play next", "Add to queue", "Copy link"} {
+		if !tt.HasText(label) {
+			t.Errorf("track menu is missing %q: %q", label, tt.Texts())
+		}
+	}
+	if tt.HasText("Add to playlist") {
+		t.Fatal("track menu unexpectedly offers playlist editing")
+	}
+	if err := tt.Click("Play next"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.queue) != 3 || a.queue[1].VideoID != track.VideoID || a.index != 0 {
+		t.Fatalf("Play next changed queue to %#v at index %d", a.queue, a.index)
+	}
+	hoverTrack()
+	if err := tt.Click(menuButton); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("Add to queue"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.queue) != 4 || a.queue[3].VideoID != track.VideoID || a.index != 0 {
+		t.Fatalf("Add to queue changed queue to %#v at index %d", a.queue, a.index)
+	}
+	hoverTrack()
+	if err := tt.Click(menuButton); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("Copy link"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tt.Clipboard(), "https://music.youtube.com/watch?v=picked"; got != want {
+		t.Fatalf("copied link = %q, want %q", got, want)
+	}
+	hoverTrack()
+	if err := tt.Click(menuButton); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("Go to artist"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := a.router.Path(), "/artist/UCartist"; got != want {
+		t.Fatalf("Go to artist opened %q, want %q", got, want)
+	}
+}
+
+func TestEnqueueKeepsManualTracksBeforeRecommendations(t *testing.T) {
+	a := newTestApp()
+	a.current = youtube.MusicItem{VideoID: "current"}
+	a.queue = []youtube.MusicItem{
+		{VideoID: "current"}, {VideoID: "selected"}, {VideoID: "recommendation"},
+	}
+	a.index, a.recommendationStart = 0, 2
+	a.enqueue(youtube.MusicItem{VideoID: "added", Title: "Added"}, false)
+	if len(a.queue) != 4 || a.queue[2].VideoID != "added" || a.queue[3].VideoID != "recommendation" {
+		t.Fatalf("Add to queue placed items in %#v", a.queue)
+	}
+	if a.recommendationStart != 3 || a.index != 0 {
+		t.Errorf("queue position changed recommendation start to %d or current index to %d", a.recommendationStart, a.index)
+	}
+}
+
+func TestPlayNextIsRespectedWithShuffleAndAutoplayOff(t *testing.T) {
+	a := newTestApp()
+	a.settings.AutoPlay = false
+	a.current = youtube.MusicItem{VideoID: "current"}
+	a.queue = []youtube.MusicItem{{VideoID: "current"}, {VideoID: "recommendation"}}
+	a.index, a.recommendationStart, a.shuffle = 0, 1, true
+	a.enqueue(youtube.MusicItem{VideoID: "picked-next"}, true)
+	if a.recommendationStart != 2 {
+		t.Fatalf("Play next left the autoplay boundary at %d", a.recommendationStart)
+	}
+	if next, ok := a.nextIndex(); !ok || next != 1 || a.queue[next].VideoID != "picked-next" {
+		t.Fatalf("Play next returned index %d, %v in queue %#v", next, ok, a.queue)
 	}
 }
 

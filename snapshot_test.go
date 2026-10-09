@@ -140,6 +140,29 @@ func TestSnapshots(t *testing.T) {
 
 	a, tt := newShotApp("/home", false)
 	save(t, tt, "home-light")
+	track := a.feed.sections[0].Items[0]
+	track.BrowseID = "UCartist"
+	a.feed.sections[0].Items[0] = track
+	a.trackMenuKey = itemKey("song", track) + "0"
+	a.trackMenuOpen = true
+	tt.Frame()
+	save(t, tt, "track-menu")
+	a.trackMenuOpen, a.trackMenuKey = false, ""
+	tt.Frame()
+	album := a.feed.sections[1].Items[0]
+	if r, ok := tt.Find(album.Title); ok {
+		tt.Move(r.X+r.W/2, r.Y+r.H/2)
+		tt.Frame()
+		save(t, tt, "grid-card-hover")
+		if err := tt.Click("More options for " + album.Title); err != nil {
+			t.Fatal(err)
+		}
+		save(t, tt, "grid-card-menu")
+	} else {
+		t.Fatalf("listen-again card %q is not visible for its snapshot", album.Title)
+	}
+	a.trackMenuOpen, a.trackMenuKey = false, ""
+	tt.Frame()
 	play(a)
 	tt.Frame()
 	save(t, tt, "home-light-player")
@@ -204,9 +227,16 @@ func TestSnapshots(t *testing.T) {
 
 	a, tt = newShotApp("/home", false)
 	play(a)
+	a.current.BrowseID = "UCartist"
 	a.npOpen = true
 	tt.Frame()
 	save(t, tt, "now-playing")
+	a.trackMenuKey = itemKey("now-playing-menu", a.current)
+	a.trackMenuOpen = true
+	tt.Frame()
+	save(t, tt, "now-playing-menu")
+	a.trackMenuOpen, a.trackMenuKey = false, ""
+	tt.Frame()
 	a.current.Kind = "video"
 	tt.Frame()
 	save(t, tt, "now-playing-video")
