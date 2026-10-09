@@ -871,6 +871,12 @@ func TestClockAndDuration(t *testing.T) {
 	if got := parseDuration("2023"); got != 0 {
 		t.Errorf("parseDuration of a year = %v", got)
 	}
+	if got := parseLengthSeconds("125"); got != 2*time.Minute+5*time.Second {
+		t.Errorf("parseLengthSeconds = %v", got)
+	}
+	if got := parseLengthSeconds("0"); got != 0 {
+		t.Errorf("parseLengthSeconds of nothing = %v", got)
+	}
 }
 
 func TestThumbnailURLAsksForASmallerPicture(t *testing.T) {
