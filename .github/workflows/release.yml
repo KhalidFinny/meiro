@@ -54,6 +54,17 @@ jobs:
       - name: Build
         run: go tool mygo build -platform "${{ matrix.target }}" -o dist
 
+      - name: Set up Linux package tools
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          curl --fail --location --silent --show-error \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+            --output "$RUNNER_TEMP/appimagetool"
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+
       - name: Collect the downloads
         run: |
           mkdir artifacts
@@ -64,7 +75,7 @@ jobs:
               cp "$dmg" "artifacts/Meiro-${VERSION}-macos-${arch}.dmg"
               ;;
             linux-*)
-              cp dist/${{ matrix.platform }}/*.tar.gz dist/${{ matrix.platform }}/*.deb artifacts/
+              scripts/package-linux.sh "${{ matrix.platform }}" "$VERSION" artifacts
               ;;
           esac
           ls -la artifacts

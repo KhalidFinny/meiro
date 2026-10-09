@@ -85,8 +85,10 @@ Download the latest build for your system from the
 notarized by Apple yet, so the first time, right-click it and choose **Open**
 (or allow it under System Settings > Privacy & Security).
 
-**Linux**: install the `.deb`, or unpack the `.tar.gz` and run its
-`install.sh`. You need GTK 3.
+**Linux**: install the `.deb` on Debian or Ubuntu, or the `.rpm` on Fedora or a
+compatible RPM-based distribution. You can also make the `.AppImage` executable
+and run it, or unpack the `.tar.gz` and run its `install.sh`. All Linux builds
+need GTK 3 and WebKitGTK 4.1.
 
 ## Signing in
 
@@ -116,8 +118,9 @@ just dev     # run with live reload; ffmpeg and yt-dlp must be on PATH
 just run     # build the production app with bundled tools, then open it
 ```
 
-Run `just` to list the other commands. The release workflow builds macOS
-Apple Silicon and Intel apps, plus Linux `amd64` and `arm64` packages. See
+Run `just` to list the other commands. The release workflow builds DMGs for
+macOS Apple Silicon and Intel, plus Linux `amd64` and `arm64` `.deb`, `.rpm`,
+`.AppImage`, and `.tar.gz` downloads. See
 [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
 ## Credits
