@@ -76,7 +76,7 @@ func (a *app) rowView(c *ui.Context, i int) {
 	case rowColumns:
 		a.columnShelf(c, r)
 	case rowTrack:
-		a.songRow(c, r.item, a.playable, songOptions{number: r.number(), inset: true})
+		a.songRow(c, r.item, a.playable, songOptions{number: r.number(), inset: true, fetchArtwork: true})
 	case rowMore:
 		ui.Row(c).Justify(ui.Center).Padding(16).Children(func() {
 			if m3.Button(c, m3.ButtonSpec{Label: r.title, Kind: m3.Tonal, Size: m3.Medium56, Key: "more"}).Clicked() {
@@ -142,10 +142,12 @@ func (a *app) sectionHeading(c *ui.Context, r row, paged, first bool) {
 
 // cardShelf is a row of cards that scrolls sideways.
 func (a *app) cardShelf(c *ui.Context, r row) {
+	st := a.carousel(r.shelf)
+	first, last := st.VisibleRange(len(r.items), cardWidth, 4, pageGutter-8, 1)
 	ui.Column(c).Children(func() {
-		m3.Carousel(c, a.carousel(r.shelf), r.shelf, 4, pageGutter-8, func() {
-			for _, item := range r.items {
-				a.card(c, item, r.queue)
+		m3.Carousel(c, st, r.shelf, 4, pageGutter-8, func() {
+			for i, item := range r.items {
+				a.card(c, item, r.queue, i >= first && i < last)
 			}
 		})
 	})
@@ -154,13 +156,17 @@ func (a *app) cardShelf(c *ui.Context, r row) {
 // columnShelf is songs in columns of four, which scroll sideways: the shelf
 // of quick picks.
 func (a *app) columnShelf(c *ui.Context, r row) {
+	st := a.carousel(r.shelf)
+	groups := (len(r.items) + 3) / 4
+	first, last := st.VisibleRange(groups, columnWidth, 8, pageGutter-8, 1)
 	ui.Column(c).Children(func() {
-		m3.Carousel(c, a.carousel(r.shelf), r.shelf, 8, pageGutter-8, func() {
+		m3.Carousel(c, st, r.shelf, 8, pageGutter-8, func() {
 			for start := 0; start < len(r.items); start += 4 {
 				group := r.items[start:min(start+4, len(r.items))]
+				fetchArtwork := start/4 >= first && start/4 < last
 				ui.Column(c).Key(start).Width(columnWidth).Shrink(0).Children(func() {
 					for _, item := range group {
-						a.songRow(c, item, r.queue, songOptions{})
+						a.songRow(c, item, r.queue, songOptions{fetchArtwork: fetchArtwork})
 					}
 				})
 			}
@@ -191,7 +197,7 @@ func artRadius(item youtube.MusicItem, square float32) float32 {
 
 // card shows an album, a playlist, an artist or a song as artwork over its
 // name. A play button rises over the artwork under the pointer.
-func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicItem) {
+func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicItem, fetchArtwork bool) {
 	sc := m3.Active().Scheme
 	kind, _ := targetOf(item)
 	key := itemKey("card", item)
@@ -206,7 +212,7 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 	card.Children(func() {
 		radius := artRadius(item, m3.LargeIncreased)
 		opening := a.opening == itemKey("open", item)
-		m3.Art(c, a.thumbs.bitmap(item.Thumbnail, 320), cardArt, radius, func() {
+		m3.Art(c, a.thumbs.bitmapIf(item.Thumbnail, 320, fetchArtwork), cardArt, radius, func() {
 			if isVideo(item) {
 				m3.VideoBadge(c, cardArt)
 			}
@@ -299,9 +305,10 @@ type songOptions struct {
 	number int
 	// inset puts the row in from the edges of the page, as the rows of a
 	// page of songs are; rows in a shelf sit flush.
-	inset       bool
-	directQueue bool
-	source      string
+	inset        bool
+	directQueue  bool
+	source       string
+	fetchArtwork bool
 }
 
 // songRow shows a song, an album, an artist or a playlist as a row: artwork,
@@ -349,7 +356,7 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 					}
 				})
 			} else {
-				m3.Art(c, a.thumbs.bitmap(item.Thumbnail, 128), 48, artRadius(item, m3.Medium), func() {
+				m3.Art(c, a.thumbs.bitmapIf(item.Thumbnail, 128, o.fetchArtwork), 48, artRadius(item, m3.Medium), func() {
 					if isSong && (playing || hovered) {
 						ui.Box(c).Fill().Center().Background(sc.Scrim.Alpha(0.45)).Children(func() {
 							if playing && a.loading() {

@@ -87,6 +87,112 @@ func TestThumbCacheStandsInWithSmallerSize(t *testing.T) {
 	}
 }
 
+func TestThumbCacheRebuildsEvictedBitmapWithoutDownloading(t *testing.T) {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 8, 8)), nil); err != nil {
+		t.Fatal(err)
+	}
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer server.Close()
+
+	cache := newThumbCache(func() {})
+	url := server.URL + "/cover=w60-h60"
+	cache.bitmap(url, 60)
+	waitFor(t, func() bool { return cache.bitmap(url, 60) != nil })
+	if hits.Load() != 1 {
+		t.Fatalf("initial downloads = %d, want 1", hits.Load())
+	}
+
+	cache.mu.Lock()
+	cache.evictLeastRecent("")
+	if len(cache.bitmaps) != 0 || len(cache.sources) != 1 {
+		cache.mu.Unlock()
+		t.Fatalf("after eviction: bitmaps = %d, sources = %d; want 0 and 1", len(cache.bitmaps), len(cache.sources))
+	}
+	cache.mu.Unlock()
+
+	if got := cache.bitmap(url, 60); got != nil {
+		t.Fatal("evicted bitmap was returned before it was rebuilt")
+	}
+	waitFor(t, func() bool { return cache.bitmap(url, 60) != nil })
+	if hits.Load() != 1 {
+		t.Errorf("rebuilding the bitmap made %d downloads, want 1 total", hits.Load())
+	}
+}
+
+func TestThumbCacheDoesNotFetchOutsideCarouselRange(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		hits.Add(1)
+	}))
+	defer server.Close()
+
+	cache := newThumbCache(func() {})
+	if got := cache.bitmapIf(server.URL+"/cover=w60-h60", 60, false); got != nil {
+		t.Fatal("off-screen request returned a bitmap")
+	}
+	cache.mu.Lock()
+	pending := len(cache.pending)
+	cache.mu.Unlock()
+	if pending != 0 || hits.Load() != 0 {
+		t.Errorf("off-screen request: pending = %d, downloads = %d; want 0 and 0", pending, hits.Load())
+	}
+}
+
+func TestThumbnailURLChoosesSmallerYouTubeVariants(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		size int
+		want string
+	}{
+		{
+			name: "card",
+			url:  "https://i.ytimg.com/vi/video/hq720.jpg?sqp=token",
+			size: 320,
+			want: "https://i.ytimg.com/vi/video/mqdefault.jpg?sqp=token",
+		},
+		{
+			name: "row",
+			url:  "https://i.ytimg.com/vi/video/hq720.jpg",
+			size: 128,
+			want: "https://i.ytimg.com/vi/video/default.jpg",
+		},
+		{
+			name: "hero",
+			url:  "https://i.ytimg.com/vi/video/maxresdefault.jpg",
+			size: 512,
+			want: "https://i.ytimg.com/vi/video/hqdefault.jpg",
+		},
+		{
+			name: "do not upscale",
+			url:  "https://i.ytimg.com/vi/video/default.jpg",
+			size: 320,
+			want: "https://i.ytimg.com/vi/video/default.jpg",
+		},
+		{
+			name: "unrecognized host",
+			url:  "https://images.example/video/hq720.jpg",
+			size: 320,
+			want: "https://images.example/video/hq720.jpg",
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := thumbnailURL(test.url, test.size); got != test.want {
+				t.Errorf("thumbnailURL(%q, %d) = %q, want %q", test.url, test.size, got, test.want)
+			}
+		})
+	}
+	if got, want := sizeless("https://i.ytimg.com/vi/video/mqdefault.jpg?sqp=token"), "https://i.ytimg.com/vi/video/thumbnail.jpg?sqp=token"; got != want {
+		t.Errorf("sizeless YouTube URL = %q, want %q", got, want)
+	}
+}
+
 func waitFor(t *testing.T, ok func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)

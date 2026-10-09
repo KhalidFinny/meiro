@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -87,6 +88,40 @@ func TestHomeListsSections(t *testing.T) {
 	}
 	if _, ok := tt.Find("Account"); !ok {
 		t.Errorf("the account button is missing: %q", tt.Texts())
+	}
+}
+
+func TestCardShelfFetchesVisibleArtworkAndLoadsAsItScrolls(t *testing.T) {
+	a := newTestApp()
+	a.location = "/home"
+	items := make([]youtube.MusicItem, 20)
+	for i := range items {
+		id := strconv.Itoa(i)
+		items[i] = youtube.MusicItem{
+			ID: id, BrowseID: "MPREb_" + id, Kind: "music_item",
+			Title: "Album " + id, Thumbnail: "https://art.test/albums/" + id,
+		}
+	}
+	a.feed = pageState{sections: []youtube.MusicSection{{Title: "Albums", Items: items}}}
+	requested := make(map[string]bool)
+	a.thumbs.synth = func(url string, _ int) *ui.Bitmap {
+		requested[url] = true
+		return ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 8, 8)))
+	}
+
+	tt := ui.NewTester(a.view, 1000, 700)
+	if len(requested) == 0 || len(requested) == len(items) {
+		t.Fatalf("initial artwork requests = %d of %d items", len(requested), len(items))
+	}
+
+	state := a.carousels["/home#0"]
+	if state == nil || state.MaxX <= 0 {
+		t.Fatal("the card shelf did not create a scrollable carousel")
+	}
+	state.X = state.MaxX
+	tt.Frame()
+	if !requested[items[len(items)-1].Thumbnail] {
+		t.Error("scrolling to the end did not request the newly visible artwork")
 	}
 }
 

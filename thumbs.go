@@ -8,8 +8,11 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
+	neturl "net/url"
+	"path"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,16 +27,20 @@ import (
 // GPU as long as the app uses it, so the cache must not grow without end
 // while the user browses. It counts bytes, not bitmaps, because a cover is
 // tens of kilobytes at one size and over a megabyte at another.
-const thumbBudget = 48 << 20
+const thumbBudget = 128 << 20
+
+// thumbSourceBudget bounds compressed pictures kept for rebuilding evicted
+// bitmaps without downloading them again.
+const thumbSourceBudget = 32 << 20
 
 // thumbRetry is how long a failed download waits before the next try.
 const thumbRetry = 10 * time.Second
 
-// thumbCache downloads and decodes artwork, once for each URL.
+// thumbCache keeps decoded artwork and a smaller cache of compressed sources.
 type thumbCache struct {
 	client *http.Client
 	notify func()
-	// slots holds a token for each download under way.
+	// slots bounds downloads and in-memory decodes that are under way.
 	slots chan struct{}
 	// synth, when set, answers every request without the network: tests give
 	// pages artwork of their own making.
@@ -41,11 +48,13 @@ type thumbCache struct {
 
 	mu      sync.Mutex
 	bitmaps map[string]*thumb
-	// held is the bytes the bitmaps take, and tick counts the draws that
-	// asked for one, so each bitmap can say when it was last drawn.
-	held    int
-	tick    uint64
-	pending map[string]bool
+	sources map[string]*thumbSource
+	// held and sourceHeld count their respective caches' bytes. tick orders
+	// bitmap touches and source-cache reads and writes for both LRUs.
+	held       int
+	sourceHeld int
+	tick       uint64
+	pending    map[string]bool
 	// failed holds when each download last failed. A failure is only held
 	// for thumbRetry, so a dropped connection does not leave a cover blank
 	// for the rest of the session.
@@ -65,6 +74,12 @@ type thumb struct {
 	used      uint64
 }
 
+// thumbSource is the compressed picture kept after its bitmap is evicted.
+type thumbSource struct {
+	data []byte
+	used uint64
+}
+
 // thumbBytes estimates the memory a bitmap takes: its pixels, and the
 // smaller copies MyGo makes of them for drawing it small, which add up to a
 // third more.
@@ -80,6 +95,7 @@ func newThumbCache(notify func()) *thumbCache {
 		client:  &http.Client{Timeout: 30 * time.Second},
 		notify:  notify,
 		bitmaps: make(map[string]*thumb),
+		sources: make(map[string]*thumbSource),
 		pending: make(map[string]bool),
 		failed:  make(map[string]time.Time),
 		sizes:   make(map[string][]string),
@@ -88,10 +104,20 @@ func newThumbCache(notify func()) *thumbCache {
 }
 
 // bitmap returns the artwork at url, asked for at size pixels across. While
-// it downloads, or after it failed, it returns another size of the same
-// picture when one is loaded, and nil otherwise.
+// it downloads or rebuilds from a compressed source, it returns another size
+// of the same picture when one is loaded, and nil otherwise.
 func (t *thumbCache) bitmap(url string, size int) *ui.Bitmap {
+	return t.bitmapIf(url, size, true)
+}
+
+// bitmapIf returns a picture only when it may be fetched. Carousel cards
+// outside the visible range use this to avoid touching cache entries or
+// starting work for clipped children.
+func (t *thumbCache) bitmapIf(url string, size int, fetch bool) *ui.Bitmap {
 	if url == "" {
+		return nil
+	}
+	if !fetch {
 		return nil
 	}
 	if t.synth != nil {
@@ -104,7 +130,10 @@ func (t *thumbCache) bitmap(url string, size int) *ui.Bitmap {
 		return t.touch(entry)
 	}
 	if !t.pending[url] {
-		if failedAt, ok := t.failed[url]; !ok || time.Since(failedAt) > thumbRetry {
+		if source, ok := t.source(url); ok {
+			t.pending[url] = true
+			go t.rebuild(url, source)
+		} else if failedAt, ok := t.failed[url]; !ok || time.Since(failedAt) > thumbRetry {
 			delete(t.failed, url)
 			t.pending[url] = true
 			go t.fetch(url)
@@ -125,8 +154,20 @@ func (t *thumbCache) touch(entry *thumb) *ui.Bitmap {
 	return entry.bitmap
 }
 
-// thumbFetches is how many pictures download at once. A page of covers asks
-// for dozens together, and the connections would crowd each other out.
+// source returns compressed bytes from memory and marks them recently used.
+// The returned bytes are immutable and remain valid if the entry is evicted.
+// The caller holds t.mu.
+func (t *thumbCache) source(url string) ([]byte, bool) {
+	entry, ok := t.sources[url]
+	if !ok {
+		return nil, false
+	}
+	t.tick++
+	entry.used = t.tick
+	return entry.data, true
+}
+
+// thumbFetches limits concurrent downloads and bitmap rebuilds.
 const thumbFetches = 6
 
 // thumbLimit is the largest picture the cache will take.
@@ -162,28 +203,76 @@ func (t *thumbCache) download(url string) ([]byte, error) {
 func (t *thumbCache) fetch(url string) {
 	t.slots <- struct{}{}
 	defer func() { <-t.slots }()
-	// The picture is decoded once, for the bitmap and for its colour alike.
-	var bitmap *ui.Bitmap
-	var colour ui.Color
-	var hasColour bool
-	if data, err := t.download(url); err == nil {
-		if img, _, err := image.Decode(bytes.NewReader(data)); err == nil {
-			bitmap = ui.NewBitmap(img)
-			colour, hasColour = dominantColour(img)
-		}
+	data, err := t.download(url)
+	if err != nil {
+		t.failedFetch(url)
+		return
 	}
+	t.decode(url, data, true)
+}
+
+// rebuild decodes a cached picture without fetching it again.
+func (t *thumbCache) rebuild(url string, data []byte) {
+	t.slots <- struct{}{}
+	defer func() { <-t.slots }()
+	t.decode(url, data, false)
+}
+
+// decode creates a bitmap and colour, retaining downloaded source bytes.
+func (t *thumbCache) decode(url string, data []byte, keepSource bool) {
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.failedFetch(url)
+		return
+	}
+	bitmap := ui.NewBitmap(img)
+	colour, hasColour := dominantColour(img)
 	t.mu.Lock()
 	delete(t.pending, url)
-	if bitmap == nil {
-		t.failed[url] = time.Now()
-		t.mu.Unlock()
-		// Draw again once the wait is over, so the next frame tries again.
-		time.AfterFunc(thumbRetry+time.Second, t.notify)
-		return
+	delete(t.failed, url)
+	if keepSource {
+		t.storeSource(url, data)
 	}
 	t.store(url, &thumb{bitmap: bitmap, colour: colour, hasColour: hasColour, bytes: thumbBytes(bitmap)})
 	t.mu.Unlock()
 	t.notify()
+}
+
+// failedFetch notes a failed download or decode and schedules a retry.
+func (t *thumbCache) failedFetch(url string) {
+	t.mu.Lock()
+	delete(t.pending, url)
+	t.failed[url] = time.Now()
+	t.mu.Unlock()
+	// Draw again once the wait is over, so the next frame tries again.
+	time.AfterFunc(thumbRetry+time.Second, t.notify)
+}
+
+// storeSource keeps compressed bytes under their own LRU budget. The caller
+// holds the lock.
+func (t *thumbCache) storeSource(url string, data []byte) {
+	if len(data) > thumbSourceBudget {
+		return
+	}
+	if old, ok := t.sources[url]; ok {
+		t.sourceHeld -= len(old.data)
+	}
+	t.tick++
+	t.sources[url] = &thumbSource{data: data, used: t.tick}
+	t.sourceHeld += len(data)
+	for t.sourceHeld > thumbSourceBudget {
+		oldest, found := "", false
+		for key, entry := range t.sources {
+			if key != url && (!found || entry.used < t.sources[oldest].used) {
+				oldest, found = key, true
+			}
+		}
+		if !found {
+			break
+		}
+		t.sourceHeld -= len(t.sources[oldest].data)
+		delete(t.sources, oldest)
+	}
 }
 
 // store keeps a bitmap that has landed, and drops the ones drawn least
@@ -242,7 +331,60 @@ func thumbnailURL(url string, size int) string {
 	if thumbnailScalePattern.MatchString(url) {
 		return thumbnailScalePattern.ReplaceAllString(url, "=s"+strconv.Itoa(size))
 	}
+	parsed, err := neturl.Parse(url)
+	if err != nil {
+		return url
+	}
+	variant, ext, ok := youtubeThumbnailVariant(parsed)
+	if !ok {
+		return url
+	}
+	wanted := "hqdefault"
+	if size <= 128 {
+		wanted = "default"
+	} else if size <= 320 {
+		wanted = "mqdefault"
+	}
+	if youtubeVariantRank(variant) > youtubeVariantRank(wanted) {
+		parsed.Path = path.Join(path.Dir(parsed.Path), wanted+ext)
+		return parsed.String()
+	}
 	return url
+}
+
+// youtubeThumbnailVariant finds a standard YouTube thumbnail filename.
+func youtubeThumbnailVariant(parsed *neturl.URL) (variant, ext string, ok bool) {
+	host := parsed.Hostname()
+	if host != "ytimg.com" && !strings.HasSuffix(host, ".ytimg.com") {
+		return "", "", false
+	}
+	ext = path.Ext(parsed.Path)
+	if ext != ".jpg" && ext != ".webp" {
+		return "", "", false
+	}
+	variant = strings.TrimSuffix(path.Base(parsed.Path), ext)
+	return variant, ext, youtubeVariantRank(variant) >= 0
+}
+
+// youtubeVariantRank orders the standard thumbnail sizes, from smallest to
+// largest, so requests only downgrade a source that is larger than needed.
+func youtubeVariantRank(variant string) int {
+	switch variant {
+	case "default":
+		return 0
+	case "mqdefault":
+		return 1
+	case "hqdefault":
+		return 2
+	case "sddefault":
+		return 3
+	case "hq720":
+		return 4
+	case "maxresdefault":
+		return 5
+	default:
+		return -1
+	}
 }
 
 // sizeless is url without the size Google's image host was asked for.
@@ -250,7 +392,18 @@ func sizeless(url string) string {
 	if thumbnailSizePattern.MatchString(url) {
 		return thumbnailSizePattern.ReplaceAllString(url, "=")
 	}
-	return thumbnailScalePattern.ReplaceAllString(url, "=")
+	if thumbnailScalePattern.MatchString(url) {
+		return thumbnailScalePattern.ReplaceAllString(url, "=")
+	}
+	parsed, err := neturl.Parse(url)
+	if err != nil {
+		return url
+	}
+	if _, ext, ok := youtubeThumbnailVariant(parsed); ok {
+		parsed.Path = path.Join(path.Dir(parsed.Path), "thumbnail"+ext)
+		return parsed.String()
+	}
+	return url
 }
 
 // colour returns the colour that stands out in the artwork at url, asked for

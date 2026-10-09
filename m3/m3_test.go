@@ -140,3 +140,21 @@ func TestThemeModes(t *testing.T) {
 		t.Errorf("System mode did not follow the desktop")
 	}
 }
+
+func TestCarouselVisibleRangeIncludesViewportAndPrefetch(t *testing.T) {
+	state := &CarouselState{}
+	if first, last := state.VisibleRange(20, 100, 10, 10, 1); first != 0 || last != 5 {
+		t.Errorf("initial range = [%d, %d), want [0, 5)", first, last)
+	}
+
+	state.view = 430
+	state.X = 220
+	if first, last := state.VisibleRange(20, 100, 10, 10, 1); first != 1 || last != 7 {
+		t.Errorf("scrolled range = [%d, %d), want [1, 7)", first, last)
+	}
+
+	state.X = 10000
+	if first, last := state.VisibleRange(20, 100, 10, 10, 1); first != 20 || last != 20 {
+		t.Errorf("end range = [%d, %d), want [20, 20)", first, last)
+	}
+}

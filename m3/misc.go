@@ -1,6 +1,7 @@
 package m3
 
 import (
+	"math"
 	"strings"
 	"unicode"
 
@@ -210,6 +211,27 @@ func (s *CarouselState) CanPage(direction int) bool {
 		return s.X > 1
 	}
 	return s.X < s.MaxX-1
+}
+
+// VisibleRange returns the item indices to show or prefetch for a carousel.
+// The first index is inclusive and the last is exclusive. It uses the
+// viewport measured in the previous frame, with room for four items before
+// the first layout has measured it.
+func (s *CarouselState) VisibleRange(count int, itemWidth, gap, padding float32, prefetch int) (first, last int) {
+	if count <= 0 || itemWidth <= 0 || gap < 0 {
+		return 0, 0
+	}
+	prefetch = max(prefetch, 0)
+	step := itemWidth + gap
+	view := s.view
+	if view <= 0 {
+		view = itemWidth*4 + gap*3
+	}
+	first = int(math.Floor(float64((s.X-padding-itemWidth)/step))) + 1 - prefetch
+	last = int(math.Ceil(float64((s.X+view-padding)/step))) + prefetch
+	first = max(0, min(count, first))
+	last = max(first, min(count, last))
+	return first, last
 }
 
 // Carousel lays items out in one row that scrolls sideways, as a shelf of
