@@ -91,6 +91,42 @@ func TestBoundedBufferNeverGrowsPastItsLimit(t *testing.T) {
 	}
 }
 
+// endOfStream decides whether a track has been played to its end. Its truth
+// table is the whole contract the UI advances tracks on: a pause near the
+// end holds the track, and only an unpaused stream with its data read out
+// and the device idle is over.
+func TestEndOfStream(t *testing.T) {
+	const (
+		idleDevice    = false // the device player reports not playing
+		playingDevice = true
+		held          = true  // the stream is paused
+		following     = false // the stream is not paused
+		noneRead      = int64(0)
+		someRead      = int64(1024)
+	)
+	for _, tt := range []struct {
+		name      string
+		read      int64
+		eof       bool
+		isPlaying bool
+		paused    bool
+		want      bool
+	}{
+		{"nothing read is not the end", noneRead, true, idleDevice, following, false},
+		{"no end of data is not the end", someRead, false, idleDevice, following, false},
+		{"a playing stream is not over", someRead, true, playingDevice, following, false},
+		{"a paused stream at its end is held, not ended", someRead, true, idleDevice, held, false},
+		{"a paused stream before its end is held", someRead, false, playingDevice, held, false},
+		{"a stream read out with the device idle has ended", someRead, true, idleDevice, following, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := endOfStream(tt.read, tt.eof, tt.isPlaying, tt.paused); got != tt.want {
+				t.Errorf("endOfStream(read=%d, eof=%v, playing=%v, paused=%v) = %v, want %v", tt.read, tt.eof, tt.isPlaying, tt.paused, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFailureIgnoresACleanExitAfterSound(t *testing.T) {
 	done := make(chan struct{})
 	close(done)

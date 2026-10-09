@@ -258,8 +258,16 @@ func (p *Player) Failure() string {
 	return message
 }
 
+// endOfStream says whether a stream has been played to its end. A paused
+// stream also finds its device player not playing while the samples it holds
+// drain or sit, which is not the track's end: only an unpaused stream with
+// the device idle and its data read out says that.
+func endOfStream(read int64, eof, devicePlaying, paused bool) bool {
+	return read > 0 && eof && !devicePlaying && !paused
+}
+
 func (p *Player) endedLocked(s *session) bool {
-	return s.source.read.Load() > 0 && s.source.eof.Load() && !s.out.IsPlaying()
+	return endOfStream(s.source.read.Load(), s.source.eof.Load(), s.out.IsPlaying(), s.paused)
 }
 
 // startLocked replaces the current stream with url, decoded from at, and
