@@ -15,19 +15,15 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
 const (
-	defaultMusicURL      = "https://music.youtube.com"
 	defaultAPIURL        = "https://www.youtube.com"
 	defaultMusicVersion  = "1.20250219.01.00"
 	defaultWebVersion    = "2.20260623.01.00"
-	defaultTVVersion     = "7.20260311.12.00"
 	defaultMusicContext  = "WEB_REMIX"
 	defaultMusicClient   = "YTMUSIC"
 	defaultMusicClientID = "67"
@@ -37,32 +33,25 @@ const (
 // biggest pages, a whole library, are a few megabytes.
 const maxResponseBytes = 64 << 20
 
-// maxConfigBytes bounds the HTML downloaded to discover InnerTube settings.
-const maxConfigBytes = 32 << 20
+// defaultResponseHeaderTimeout bounds how long the default client waits for a
+// response's headers. The body is left to the request context, so a slow
+// stream is not cut off by a client-wide deadline.
+const defaultResponseHeaderTimeout = 30 * time.Second
 
-// browserUserAgent is the User-Agent the Music homepage needs to serve its
-// full page, which carries the InnerTube API key. Without it, YouTube
-// answers with a stub that has no key.
+// browserUserAgent is sent with every request. YouTube serves the InnerTube API
+// to public clients, and a browser User-Agent keeps it from treating the
+// request as a script and returning a stub.
 const browserUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
-var (
-	apiKeyPattern        = regexp.MustCompile(`"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"`)
-	clientVersionPattern = regexp.MustCompile(`"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"`)
-	visitorDataPattern   = regexp.MustCompile(`"VISITOR_DATA"\s*:\s*"([^"]+)"`)
-)
-
-// Options configures a Music client. BaseURL is the YouTube InnerTube API host;
-// MusicURL is the homepage used to discover its API key and client context. If
-// APIKey is empty, the first request reads the key, Music client version, and
-// visitor data from MusicURL.
+// Options configures a Music client. BaseURL is the YouTube InnerTube API host.
+// APIKey is optional: YouTube answers the supported endpoints without one, and
+// when it is set it is sent as the request's key.
 type Options struct {
 	HTTPClient       *http.Client
 	BaseURL          string
-	MusicURL         string
 	APIKey           string
 	ClientVersion    string
 	WebClientVersion string
-	TVClientVersion  string
 	VisitorData      string
 	Language         string
 	Country          string
@@ -81,42 +70,39 @@ type Options struct {
 type Client struct {
 	httpClient              *http.Client
 	baseURL                 string
-	musicURL                string
 	apiKey                  string
 	clientVersion           string
 	webClientVersion        string
-	tvClientVersion         string
 	visitorData             string
 	language                string
 	country                 string
 	cookieAuth              *CookieAuth
 	allowInsecureCookieAuth bool
 	keepRenderers           bool
+}
 
-	configMu sync.Mutex
+// newHTTPClient builds the default HTTP client. It bounds only the wait for
+// response headers: the request context governs how long the body may take.
+func newHTTPClient(responseHeaderTimeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
+	return &http.Client{Transport: transport}
 }
 
 // NewClient constructs a client. No network request is made until a method is
-// called. If APIKey is empty, the first request bootstraps configuration from
-// the Music homepage.
+// called.
 func NewClient(options Options) *Client {
 	if options.HTTPClient == nil {
-		options.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+		options.HTTPClient = newHTTPClient(defaultResponseHeaderTimeout)
 	}
 	if options.BaseURL == "" {
 		options.BaseURL = defaultAPIURL
-	}
-	if options.MusicURL == "" {
-		options.MusicURL = defaultMusicURL
 	}
 	if options.ClientVersion == "" {
 		options.ClientVersion = defaultMusicVersion
 	}
 	if options.WebClientVersion == "" {
 		options.WebClientVersion = defaultWebVersion
-	}
-	if options.TVClientVersion == "" {
-		options.TVClientVersion = defaultTVVersion
 	}
 	if options.Language == "" {
 		options.Language = "en"
@@ -127,11 +113,9 @@ func NewClient(options Options) *Client {
 	return &Client{
 		httpClient:              options.HTTPClient,
 		baseURL:                 strings.TrimRight(options.BaseURL, "/"),
-		musicURL:                strings.TrimRight(options.MusicURL, "/"),
 		apiKey:                  options.APIKey,
 		clientVersion:           options.ClientVersion,
 		webClientVersion:        options.WebClientVersion,
-		tvClientVersion:         options.TVClientVersion,
 		visitorData:             options.VisitorData,
 		language:                options.Language,
 		country:                 options.Country,
@@ -168,43 +152,6 @@ func (c *Client) context() clientContext {
 	return ctx
 }
 
-func (c *Client) ensureConfig(ctx context.Context) error {
-	c.configMu.Lock()
-	defer c.configMu.Unlock()
-	if c.apiKey != "" {
-		return nil
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.musicURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", browserUserAgent)
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("youtube: load Music configuration: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return responseError("load Music configuration", resp)
-	}
-	body, err := readBoundedBody(resp.Body, maxConfigBytes, "Music configuration")
-	if err != nil {
-		return err
-	}
-	key := apiKeyPattern.FindSubmatch(body)
-	if len(key) < 2 {
-		return errors.New("youtube: API key not found on Music homepage; set Options.APIKey")
-	}
-	c.apiKey = string(key[1])
-	if match := clientVersionPattern.FindSubmatch(body); len(match) > 1 {
-		c.clientVersion = string(match[1])
-	}
-	if match := visitorDataPattern.FindSubmatch(body); len(match) > 1 {
-		c.visitorData = string(match[1])
-	}
-	return nil
-}
-
 func readBoundedBody(body io.Reader, limit int64, label string) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(body, limit+1))
 	if err != nil {
@@ -222,7 +169,6 @@ type innerTubeClient string
 const (
 	musicClient innerTubeClient = "YTMUSIC"
 	webClient   innerTubeClient = "WEB"
-	tvClient    innerTubeClient = "TV"
 )
 
 func (c *Client) execute(ctx context.Context, endpoint string, payload map[string]any) (json.RawMessage, error) {
@@ -230,17 +176,12 @@ func (c *Client) execute(ctx context.Context, endpoint string, payload map[strin
 }
 
 func (c *Client) executeForClient(ctx context.Context, endpoint string, payload map[string]any, client innerTubeClient) (json.RawMessage, error) {
-	if err := c.ensureConfig(ctx); err != nil {
-		return nil, err
-	}
 	var clientName, clientID, clientVersion string
 	switch client {
 	case musicClient:
 		clientName, clientID, clientVersion = defaultMusicContext, defaultMusicClientID, c.clientVersion
 	case webClient:
 		clientName, clientID, clientVersion = "WEB", "1", c.webClientVersion
-	case tvClient:
-		clientName, clientID, clientVersion = "TVHTML5", "7", c.tvClientVersion
 	default:
 		return nil, fmt.Errorf("youtube: unsupported InnerTube client %q", client)
 	}
@@ -267,7 +208,9 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 		return nil, errors.New("youtube: refusing to send cookie authentication to a non-YouTube or non-HTTPS URL")
 	}
 	query := parsedURL.Query()
-	query.Set("key", c.apiKey)
+	if c.apiKey != "" {
+		query.Set("key", c.apiKey)
+	}
 	parsedURL.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, parsedURL.String(), bytes.NewReader(body))
 	if err != nil {
@@ -275,6 +218,7 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", browserUserAgent)
 	origin := parsedURL.Scheme + "://" + parsedURL.Host
 	req.Header.Set("Origin", origin)
 	req.Header.Set("Referer", origin+"/")
@@ -283,9 +227,6 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 	// The visitor ID is an anonymous visit's; a signed-in session is its own.
 	if c.visitorData != "" && c.cookieAuth == nil {
 		req.Header.Set("X-Goog-Visitor-Id", c.visitorData)
-	}
-	if client == tvClient {
-		req.Header.Set("User-Agent", "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version")
 	}
 	if c.cookieAuth != nil {
 		req.Header.Set("Cookie", c.cookieAuth.cookie)
@@ -303,8 +244,12 @@ func (c *Client) executeForClient(ctx context.Context, endpoint string, payload 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, responseError(endpoint, resp)
 	}
+	responseBody, err := readBoundedBody(resp.Body, maxResponseBytes, endpoint+" response")
+	if err != nil {
+		return nil, err
+	}
 	var result json.RawMessage
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&result); err != nil {
+	if err := json.Unmarshal(responseBody, &result); err != nil {
 		return nil, fmt.Errorf("youtube: decode %s response: %w", endpoint, err)
 	}
 	return result, nil

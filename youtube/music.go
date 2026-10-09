@@ -295,39 +295,28 @@ func (c *Client) GetAccountDetails(ctx context.Context) (*AccountDetails, error)
 	if c.cookieAuth == nil {
 		return nil, errors.New("youtube: GetAccountDetails requires cookie authentication")
 	}
-	raw, err := c.executeForClient(ctx, "account/accounts_list", map[string]any{}, tvClient)
+	raw, err := c.execute(ctx, "account/account_menu", map[string]any{})
 	if err != nil {
 		return nil, err
 	}
 	details := &AccountDetails{Raw: raw}
-	if channels := extractAccountChannels(raw); len(channels) > 0 {
-		selected := channels[0]
-		for _, channel := range channels {
-			if channel.Selected {
-				selected = channel
-				break
-			}
+	// The account menu names the active account, its email, and its photo in
+	// one header renderer.
+	if header := findRenderer(raw, "activeAccountHeaderRenderer"); header != nil {
+		details.Name = rendererText(header["accountName"])
+		details.Email = rendererText(header["email"])
+		details.Thumbnail = rendererThumbnail(header["accountPhoto"])
+	}
+	// The header carries no channel ID; the menu's account list does.
+	for _, channel := range extractAccountChannels(raw) {
+		if !channel.Selected {
+			continue
 		}
-		details.Name = selected.Name
-		details.ChannelID = selected.ChannelID
-		details.Thumbnail = selected.Thumbnail
-	}
-	var direct struct {
-		Name      string `json:"accountName"`
-		Email     string `json:"email"`
-		ChannelID string `json:"channelId"`
-		Thumbnail string `json:"thumbnail"`
-	}
-	_ = json.Unmarshal(raw, &direct)
-	if details.Name == "" {
-		details.Name = direct.Name
-	}
-	details.Email = direct.Email
-	if details.ChannelID == "" {
-		details.ChannelID = direct.ChannelID
-	}
-	if details.Thumbnail == "" {
-		details.Thumbnail = direct.Thumbnail
+		details.ChannelID = channel.ChannelID
+		if details.Thumbnail == "" {
+			details.Thumbnail = channel.Thumbnail
+		}
+		break
 	}
 	return details, nil
 }

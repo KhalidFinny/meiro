@@ -1,9 +1,12 @@
 package youtube
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -167,32 +170,114 @@ func TestGetAllLibraryLoadsEverySectionContinuation(t *testing.T) {
 	}
 }
 
-func TestBootstrapLoadsMusicAPIConfig(t *testing.T) {
-	var receivedVersion atomic.Value
+// TestRequestsSkipBootstrapAndSetAUserAgent pins the request policy: a client
+// with no API key talks to the InnerTube API directly, without first fetching
+// the Music homepage, and sends a browser User-Agent rather than Go's default.
+func TestRequestsSkipBootstrapAndSetAUserAgent(t *testing.T) {
+	var apiRequests, configRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			_, _ = w.Write([]byte(`{"INNERTUBE_API_KEY":"discovered-key","INNERTUBE_CLIENT_VERSION":"2.2026.discovered","VISITOR_DATA":"visitor"}`))
+		if r.URL.Path != "/youtubei/v1/browse" {
+			configRequests.Add(1)
+			t.Errorf("unexpected non-API request %s %s", r.Method, r.URL.Path)
 			return
 		}
-		var request map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatal(err)
+		apiRequests.Add(1)
+		if key := r.URL.Query().Get("key"); key != "" {
+			t.Errorf("API request key = %q, want none without configured APIKey", key)
 		}
-		client := request["context"].(map[string]any)["client"].(map[string]any)
-		receivedVersion.Store(client["clientVersion"])
-		_, _ = w.Write([]byte(`{"contents":[]}`))
+		if ua := r.Header.Get("User-Agent"); ua == "" || ua == "Go-http-client/1.1" {
+			t.Errorf("User-Agent = %q, want a browser User-Agent", ua)
+		}
+		_, _ = w.Write([]byte(`{"contents":{}}`))
 	}))
 	defer server.Close()
 
-	client := NewClient(Options{BaseURL: server.URL, MusicURL: server.URL})
+	client := NewClient(Options{BaseURL: server.URL})
 	if _, err := client.GetHomeFeed(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := receivedVersion.Load(); got != "2.2026.discovered" {
-		t.Errorf("client version = %v, want discovered version", got)
+	if apiRequests.Load() != 1 || configRequests.Load() != 0 {
+		t.Errorf("received %d API requests and %d config requests, want 1 and 0", apiRequests.Load(), configRequests.Load())
 	}
-	if client.apiKey != "discovered-key" || client.visitorData != "visitor" {
-		t.Errorf("bootstrapped client config = key %q visitor %q", client.apiKey, client.visitorData)
+}
+
+func TestExecuteReportsAnErrorStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "quota exceeded", http.StatusForbidden)
+	}))
+	defer server.Close()
+	client := NewClient(Options{BaseURL: server.URL})
+	if _, err := client.GetHomeFeed(context.Background()); err == nil || !strings.Contains(err.Error(), "HTTP 403") || !strings.Contains(err.Error(), "quota exceeded") {
+		t.Fatalf("error = %v, want the status and response body", err)
+	}
+}
+
+func TestExecuteStopsWithItsContext(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+	client := NewClient(Options{BaseURL: server.URL})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := client.GetHomeFeed(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestExecuteRejectsAnOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("a"), maxResponseBytes+1))
+	}))
+	defer server.Close()
+	client := NewClient(Options{BaseURL: server.URL})
+	if _, err := client.GetHomeFeed(context.Background()); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("error = %v, want an oversized-response error", err)
+	}
+}
+
+// TestHTTPClientBoundsHeadersButNotBodyReads separates the two lifetimes: the
+// default client caps how long it waits for response headers, while a body may
+// keep streaming past that cap as long as its context allows.
+func TestHTTPClientBoundsHeadersButNotBodyReads(t *testing.T) {
+	const chunk = "chunk"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, _ := w.(http.Flusher)
+		if r.URL.Query().Get("stall") == "headers" {
+			time.Sleep(200 * time.Millisecond)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		for i := 0; i < 5; i++ {
+			time.Sleep(40 * time.Millisecond)
+			_, _ = w.Write([]byte(chunk))
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	client := newHTTPClient(50 * time.Millisecond)
+	resp, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatalf("streaming request failed: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatalf("reading the streamed body failed: %v", err)
+	}
+	if want := 5 * len(chunk); len(body) != want {
+		t.Errorf("read %d body bytes, want %d past the 50ms header timeout", len(body), want)
+	}
+	if _, err := client.Get(server.URL + "?stall=headers"); err == nil {
+		t.Error("a response whose headers stalled past the header timeout was accepted")
 	}
 }
 
@@ -473,26 +558,26 @@ func TestLyricsRelatedAndRecapUseReadOnlyEndpoints(t *testing.T) {
 	}
 }
 
-func TestGetAccountDetailsUsesCookie(t *testing.T) {
+func TestGetAccountDetailsReadsTheAccountMenu(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/youtubei/v1/account/accounts_list" {
+		if r.URL.Path != "/youtubei/v1/account/account_menu" {
 			t.Fatalf("request path = %q", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); !strings.HasPrefix(got, "SAPISIDHASH ") {
 			t.Errorf("Authorization = %q", got)
 		}
-		if got := r.Header.Get("X-YouTube-Client-Name"); got != "7" {
-			t.Errorf("client name header = %q, want TV client ID 7", got)
+		if got := r.Header.Get("X-YouTube-Client-Name"); got != "67" {
+			t.Errorf("client name header = %q, want the Music client ID 67", got)
 		}
 		var request map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 		}
 		client := request["context"].(map[string]any)["client"].(map[string]any)
-		if client["clientName"] != "TVHTML5" || request["isAudioOnly"] != nil {
-			t.Errorf("account request client context = %#v, body = %#v", client, request)
+		if client["clientName"] != "WEB_REMIX" {
+			t.Errorf("account request client context = %#v", client)
 		}
-		_, _ = w.Write([]byte(`{"accountName":"Me"}`))
+		_, _ = w.Write([]byte(`{"actions":[{"openPopupAction":{"popup":{"multiPageMenuRenderer":{"header":{"activeAccountHeaderRenderer":{"accountName":{"runs":[{"text":"Me"}]},"email":{"runs":[{"text":"me@example.com"}]},"channelHandle":{"runs":[{"text":"@me"}]},"accountPhoto":{"thumbnails":[{"url":"https://img.example/small"},{"url":"https://img.example/me"}]}}},"sections":[{"accountSectionListRenderer":{"contents":[{"accountItemSectionRenderer":{"contents":[{"accountItemRenderer":{"accountName":{"runs":[{"text":"Me"}]},"endpoint":{"browseEndpoint":{"browseId":"UC-me"}},"isSelected":true}}]}}]}}]}}}}]}`))
 	}))
 	defer server.Close()
 	cookieAuth, err := NewCookieAuth("SAPISID=secret", CookieOptions{})
@@ -504,11 +589,11 @@ func TestGetAccountDetailsUsesCookie(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(account.Raw), `"accountName":"Me"`) {
+	if !strings.Contains(string(account.Raw), `"accountName"`) {
 		t.Errorf("account response = %s", account.Raw)
 	}
-	if account.Name != "Me" {
-		t.Errorf("account name = %q", account.Name)
+	if account.Name != "Me" || account.Email != "me@example.com" || account.ChannelID != "UC-me" || account.Thumbnail != "https://img.example/me" {
+		t.Errorf("account details = %#v", account)
 	}
 }
 

@@ -1369,7 +1369,7 @@ func TestRestoreSurfacesAnInvalidSavedCookie(t *testing.T) {
 
 func TestCancelledSignInDoesNotLeaveItsCookieSaved(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"accountName":"Me"}`))
+		_, _ = w.Write([]byte(`{"actions":[{"openPopupAction":{"popup":{"multiPageMenuRenderer":{"header":{"activeAccountHeaderRenderer":{"accountName":{"runs":[{"text":"Me"}]}}}}}}}]}`))
 	}))
 	defer server.Close()
 
