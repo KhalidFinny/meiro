@@ -36,6 +36,20 @@ func (a *app) libraryPage(c *ui.Context) {
 	})
 }
 
+// recapPage asks for a sign-in before it has anything to show: the listening
+// review is built from the account's play history.
+func (a *app) recapPage(c *ui.Context) {
+	if a.signedIn {
+		a.pageList(c)
+		return
+	}
+	ui.Column(c).Fill().Center().Children(func() {
+		a.message(c, m3.IconTrending, "Your recap lives here",
+			"Sign in to see the music you have had on repeat.",
+			"Sign in", a.signInWithGoogle)
+	})
+}
+
 // pageList builds the rows of the page in a list that builds only those in
 // view, so a page of hundreds of songs is as light as one of ten.
 func (a *app) pageList(c *ui.Context) {

@@ -39,6 +39,9 @@ type settings struct {
 	CacheDirectory string `json:"cacheDirectory,omitempty"`
 	// Recent holds the searches submitted, newest first.
 	Recent []string `json:"recent,omitempty"`
+	// Channel is the signed-in account's channel to act as, or empty for the
+	// account's default one.
+	Channel string `json:"channel,omitempty"`
 }
 
 func defaultSettings() settings {

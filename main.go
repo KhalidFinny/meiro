@@ -43,6 +43,10 @@ type app struct {
 	// that runs the work inline, so a frame sees its result at once.
 	run func(work func())
 
+	// schedule runs work once a delay passes, and returns a way to cancel it.
+	// It debounces the search suggestions; tests run the work at once.
+	schedule func(delay time.Duration, work func()) (cancel func())
+
 	// The YouTube clients: public browses without an account, authed with
 	// its cookie once the user signs in. The store keeps the sign-in across
 	// restarts.
@@ -55,9 +59,12 @@ type app struct {
 	// replace it with one that needs no network.
 	newClient func(*youtube.CookieAuth) *youtube.Client
 	store     cookieStore
-	account   youtube.AccountDetails
-	signedIn  bool
-	signIn    signInState
+	// account is the signed-in account, and accounts the channels it can act
+	// as, for the switcher in its menu.
+	account  youtube.AccountDetails
+	accounts []youtube.AccountChannel
+	signedIn bool
+	signIn   signInState
 	// signInAttempt invalidates work when a sign-in dialog is dismissed.
 	signInAttempt atomic.Uint64
 	// credentialMu serializes restore, save and delete operations so a late
@@ -209,6 +216,10 @@ func newApp() *app {
 	}
 	a.volume = a.settings.Volume
 	a.run = func(work func()) { go work() }
+	a.schedule = func(delay time.Duration, work func()) func() {
+		timer := time.AfterFunc(delay, work)
+		return func() { timer.Stop() }
+	}
 	a.newClient = func(auth *youtube.CookieAuth) *youtube.Client {
 		return youtube.NewClient(youtube.Options{CookieAuth: auth})
 	}

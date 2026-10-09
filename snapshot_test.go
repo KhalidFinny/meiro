@@ -206,6 +206,10 @@ func TestSnapshots(t *testing.T) {
 	a.settings.Recent = []string{"ambient focus", "lofi beats", "aurora vale"}
 	tt.Frame()
 	save(t, tt, "search-landing")
+	a.search.query = "aurora"
+	a.search.suggestions = []string{"aurora vale", "aurora borealis", "aurora vale live"}
+	tt.Frame()
+	save(t, tt, "search-suggestions")
 	a.search.query, a.search.submitted = "aurora", "aurora"
 	a.search.items = append(songs("sr", "Aurora", "Aurora Borealis", "Northern Aurora"), albums("sr", "Aurora Vale Live")...)
 	tt.Frame()
@@ -279,4 +283,23 @@ func TestSnapshots(t *testing.T) {
 	_, tt = newShotApp("/library", true)
 	tt.Frame()
 	save(t, tt, "library-signed-out")
+
+	a, tt = newShotApp("/recap", true)
+	a.signedIn, a.account = true, youtube.AccountDetails{Name: "Me"}
+	a.feed = pageState{sections: homeSections()}
+	play(a)
+	tt.Frame()
+	save(t, tt, "recap-signed-in")
+
+	a, tt = newShotApp("/home", true)
+	a.signedIn, a.account = true, youtube.AccountDetails{Name: "Me", Email: "me@example.com"}
+	a.accounts = []youtube.AccountChannel{
+		{Name: "Main channel", ChannelID: "UC-main", Selected: true},
+		{Name: "Brand channel", ChannelID: "UC-brand"},
+	}
+	a.settings.Channel = "UC-main"
+	a.menuOpen = true
+	play(a)
+	tt.Frame()
+	save(t, tt, "account-channels")
 }

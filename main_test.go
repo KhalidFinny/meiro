@@ -32,8 +32,12 @@ type captureSystemMedia struct{ state systemmedia.State }
 func (s *captureSystemMedia) Update(state systemmedia.State) { s.state = state }
 func (*captureSystemMedia) Close() error                     { return nil }
 
-// searches counts the search requests the fake YouTube has answered.
-var searches atomic.Int32
+// searches counts the search requests the fake YouTube has answered, and
+// fakePageID records the channel a request acted as.
+var (
+	searches   atomic.Int32
+	fakePageID atomic.Value
+)
 
 // fakeMusic answers the InnerTube endpoints with canned responses, so the
 // app's tests need no network.
@@ -45,10 +49,19 @@ func (fakeMusic) RoundTrip(request *http.Request) (*http.Response, error) {
 		body, _ := io.ReadAll(request.Body)
 		asked = string(body)
 	}
+	if id := request.Header.Get("X-Goog-PageId"); id != "" {
+		fakePageID.Store(id)
+	}
 	reply := homeResponse
 	switch {
+	case strings.HasSuffix(request.URL.Path, "/account/accounts_list"):
+		reply = accountsResponse
+	case strings.HasSuffix(request.URL.Path, "/music/get_search_suggestions"):
+		reply = suggestionsResponse
 	case strings.Contains(asked, "FEmusic_explore"):
 		reply = exploreResponse
+	case strings.Contains(asked, "FEmusic_listening_review"):
+		reply = recapResponse
 	case strings.Contains(asked, "VLPL_video"):
 		reply = playlistResponse
 	case strings.Contains(asked, "MPREb_test"):
@@ -70,11 +83,21 @@ func (fakeMusic) RoundTrip(request *http.Request) (*http.Response, error) {
 func newTestApp() *app {
 	a := newApp()
 	a.run = func(work func()) { work() }
-	client := youtube.NewClient(youtube.Options{
-		APIKey:     "test",
-		HTTPClient: &http.Client{Transport: fakeMusic{}},
-	})
-	a.public, a.authed = client, client
+	// Debounced work runs at once, so a frame sees the suggestion request's
+	// answer without waiting.
+	a.schedule = func(_ time.Duration, work func()) func() {
+		work()
+		return func() {}
+	}
+	newFakeClient := func(auth *youtube.CookieAuth) *youtube.Client {
+		return youtube.NewClient(youtube.Options{
+			APIKey:     "test",
+			HTTPClient: &http.Client{Transport: fakeMusic{}},
+			CookieAuth: auth,
+		})
+	}
+	a.newClient = newFakeClient
+	a.public, a.authed = newFakeClient(nil), newFakeClient(nil)
 	return a
 }
 
@@ -323,6 +346,96 @@ func TestSearchRunsOnSubmitOnly(t *testing.T) {
 	}
 	if n := searches.Load(); n != 2 || a.search.submitted != "ambient" {
 		t.Errorf("a filter ran %d searches for %q", n, a.search.submitted)
+	}
+}
+
+// Typing shows the completions YouTube Music offers; choosing one searches it.
+func TestSearchSuggestionsRunTheChosenSearch(t *testing.T) {
+	a := newTestApp()
+	a.router.Push("/search")
+	tt := ui.NewTester(a.view, 1000, 700)
+	searches.Store(0)
+	if err := tt.Click("Search songs, albums, artists"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("yor")
+	tt.Frame()
+	if !tt.HasText("Yorushika songs") {
+		t.Fatalf("suggestions are missing: %q", tt.Texts())
+	}
+	if n := searches.Load(); n != 0 {
+		t.Fatalf("showing suggestions ran %d searches, want 0", n)
+	}
+	if err := tt.Click("Yorushika songs"); err != nil {
+		t.Fatal(err)
+	}
+	if a.search.submitted != "Yorushika songs" || searches.Load() != 1 {
+		t.Fatalf("choosing a suggestion submitted %q after %d searches", a.search.submitted, searches.Load())
+	}
+	if tt.HasText("Yorushika songs") {
+		t.Errorf("suggestions stayed after the search ran: %q", tt.Texts())
+	}
+	if !tt.HasText("Search Result Song") {
+		t.Fatalf("the chosen search has no results: %q", tt.Texts())
+	}
+}
+
+// The recap is offered only to a signed-in account, and shows its review.
+func TestRecapPageFollowsTheSignIn(t *testing.T) {
+	a := newTestApp()
+	a.router.Push("/recap")
+	tt := ui.NewTester(a.view, 1000, 700)
+	if !tt.HasText("Your recap lives here") {
+		t.Fatalf("signed-out recap page = %q", tt.Texts())
+	}
+
+	a.signedIn, a.account = true, youtube.AccountDetails{Name: "Me"}
+	a.router.Push("/home")
+	tt.Frame()
+	if err := tt.Click("Recap"); err != nil {
+		t.Fatalf("the signed-in rail has no Recap entry: %v", err)
+	}
+	if a.router.Path() != "/recap" {
+		t.Fatalf("the Recap entry led to %q", a.router.Path())
+	}
+	tt.Frame()
+	if !tt.HasText("Top song of the year") {
+		t.Fatalf("the recap page did not load: %q", tt.Texts())
+	}
+}
+
+// The account menu lists the channels the session can act as, and switching
+// rebuilds the client around the chosen one.
+func TestAccountMenuSwitchesChannel(t *testing.T) {
+	a := newTestApp()
+	a.router.Push("/home")
+	a.signedIn = true
+	a.account = youtube.AccountDetails{Name: "Me"}
+	a.ytDlpCookie = "SAPISID=secret"
+	a.accounts = []youtube.AccountChannel{
+		{Name: "Main channel", ChannelID: "UC-main", Selected: true},
+		{Name: "Brand channel", ChannelID: "UC-brand"},
+	}
+	a.settings.Channel = "UC-main"
+	tt := ui.NewTester(a.view, 1000, 700)
+	if err := tt.Click("Account"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("Brand channel") {
+		t.Fatalf("the account menu does not list the channels: %q", tt.Texts())
+	}
+	fakePageID.Store("")
+	if err := tt.Click("Brand channel"); err != nil {
+		t.Fatal(err)
+	}
+	if a.settings.Channel != "UC-brand" {
+		t.Fatalf("the chosen channel is %q", a.settings.Channel)
+	}
+	if got, _ := fakePageID.Load().(string); got != "UC-brand" {
+		t.Fatalf("the switched client sent page ID %q, want UC-brand", got)
+	}
+	if !a.signedIn || a.authed == nil {
+		t.Fatal("switching channel dropped the sign-in")
 	}
 }
 
@@ -915,6 +1028,27 @@ const searchResponse = `{"contents":{"musicShelfRenderer":{"contents":[
 	}}
 ]}}}`
 
+const recapResponse = `{"contents":{"musicCarouselShelfRenderer":{
+	"header":{"musicCarouselShelfBasicHeaderRenderer":{"title":{"runs":[{"text":"Your recap"}]}}},
+	"contents":[
+		{"musicTwoRowItemRenderer":{
+			"title":{"runs":[{"text":"Top song of the year"}]},
+			"subtitle":{"runs":[{"text":"Someone"}]},
+			"navigationEndpoint":{"watchEndpoint":{"videoId":"vid-9"}}
+		}}
+	]
+}}}`
+
+const accountsResponse = `{"accountSectionListRenderer":{"contents":[{"accountItemSectionRenderer":{"contents":[
+	{"accountItemRenderer":{"accountName":{"simpleText":"Main channel"},"channelId":"UC-main","isSelected":true,"hasChannel":true}},
+	{"accountItemRenderer":{"accountName":{"simpleText":"Brand channel"},"channelId":"UC-brand","hasChannel":true}}
+]}}]}}`
+
+const suggestionsResponse = `{"contents":[{"searchSuggestionsSectionRenderer":{"contents":[
+	{"searchSuggestionRenderer":{"suggestion":{"runs":[{"text":"Yorushika"}]}}},
+	{"searchSuggestionRenderer":{"suggestion":{"runs":[{"text":"Yorushika songs"}]}}}
+]}}]}`
+
 func TestCookieHeader(t *testing.T) {
 	const want = "SAPISID=abc; SID=def"
 	for name, in := range map[string]string{
@@ -1391,7 +1525,7 @@ func TestCancelledSignInDoesNotLeaveItsCookieSaved(t *testing.T) {
 	attempt := a.signIn.generation
 	store.onSave = a.dismissSignIn
 
-	a.finishSignIn(context.Background(), "SAPISID=abc", attempt)
+	a.finishSignIn(context.Background(), "SAPISID=abc", attempt, "")
 	if a.signedIn || store.cookie != "" || a.signIn.cookie != "" {
 		t.Fatalf("cancelled sign-in was retained: signedIn=%v cookieSaved=%v dialogCookie=%q", a.signedIn, store.cookie != "", a.signIn.cookie)
 	}

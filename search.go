@@ -1,16 +1,27 @@
 package main
 
 import (
+	"context"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
 	"github.com/elianiva/meiro/m3"
 )
 
+// suggestDelay is how long typing pauses before the app asks YouTube Music
+// for completions, and suggestTimeout bounds one such request.
+const (
+	suggestDelay   = 180 * time.Millisecond
+	suggestTimeout = 5 * time.Second
+)
+
 // searchPage is a search bar over the filters and the results. Typing only
 // edits the text: a search runs when the user presses Enter, or picks another
-// filter for what they last searched.
+// filter for what they last searched. Typing also asks for completions, which
+// choosing one searches.
 func (a *app) searchPage(c *ui.Context) {
 	ui.Column(c).Fill().Children(func() {
 		ui.Column(c).Padding(0, pageGutter, 12).Gap(16).Shrink(0).Children(func() {
@@ -22,11 +33,18 @@ func (a *app) searchPage(c *ui.Context) {
 					AutoFocus:   a.focusSearch,
 					MaxWidth:    760,
 				})
-				if result.Submitted {
+				switch {
+				case result.Submitted:
 					a.runSearch(a.search.query)
+				case result.Cleared:
+					a.search.query = ""
+					a.cancelSuggestions()
+				case result.Changed:
+					a.suggestSearches(a.search.query)
 				}
 			})
 			a.focusSearch = false
+			a.suggestionList(c)
 			ui.Row(c).Gap(8).Wrap().Children(func() {
 				for i, kind := range searchKinds {
 					if m3.Chip(c, kind.name, i == a.search.kind, "chip-"+kind.name).Clicked() && i != a.search.kind {
@@ -43,6 +61,70 @@ func (a *app) searchPage(c *ui.Context) {
 			return
 		}
 		a.pageList(c)
+	})
+}
+
+// suggestSearches asks for the completions of what is being typed once typing
+// pauses. Each call replaces the request before it, so only the last query's
+// answer is kept. A request that lands after the query moved on is dropped.
+func (a *app) suggestSearches(query string) {
+	query = strings.TrimSpace(query)
+	a.cancelSuggestions()
+	client := a.client()
+	if query == "" || query == a.search.submitted || client == nil {
+		return
+	}
+	seq := a.search.suggestSeq
+	a.search.suggestCancel = a.schedule(suggestDelay, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), suggestTimeout)
+		defer cancel()
+		suggestions, err := client.GetSearchSuggestions(ctx, query)
+		a.update(func() {
+			if seq != a.search.suggestSeq {
+				return // the query moved on while this request was in flight
+			}
+			if err != nil {
+				a.search.suggestions = nil
+				return
+			}
+			a.search.suggestions = suggestions
+		})
+	})
+}
+
+// cancelSuggestions stops a pending completion request and forgets what it
+// found, as when the query is submitted or the page is left.
+func (a *app) cancelSuggestions() {
+	if a.search.suggestCancel != nil {
+		a.search.suggestCancel()
+		a.search.suggestCancel = nil
+	}
+	a.search.suggestSeq++
+	a.search.suggestions = nil
+}
+
+// suggestionList shows the completions of the text being typed, above the
+// results. It is hidden once the query is the one the results are for.
+func (a *app) suggestionList(c *ui.Context) {
+	if len(a.search.suggestions) == 0 || a.search.query == a.search.submitted {
+		return
+	}
+	sc := m3.Active().Scheme
+	ui.Column(c).Shrink(0).Children(func() {
+		for _, suggestion := range a.search.suggestions {
+			row := ui.ButtonBase(c.Key("suggestion-" + suggestion))
+			row.Height(44).Padding(0, 12).Gap(12).AlignItems(ui.Center).Radius(m3.Small).
+				Cursor(ui.CursorPointer).Label(suggestion).
+				Background(m3.StateFill(ui.Transparent, sc.OnSurface, row.Hovered(), row.Pressed(), row.FocusVisible()))
+			row.Children(func() {
+				ui.Icon(c, m3.IconSearch).FontSize(20).TextColor(sc.OnSurfaceVariant)
+				m3.Text(c, m3.BodyLarge, suggestion).Grow(1).SingleLine().TextColor(sc.OnSurface)
+			})
+			if row.Clicked() {
+				a.search.query = suggestion
+				a.runSearch(suggestion)
+			}
+		}
 	})
 }
 

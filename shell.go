@@ -75,20 +75,26 @@ func (a *app) view(c *ui.Context) {
 // the rail does not name, as an album or a playlist.
 func navPage(path string) string {
 	switch path {
-	case "/home", "/explore", "/library", "/search", "/settings":
+	case "/home", "/explore", "/library", "/recap", "/search", "/settings":
 		return path[1:]
 	}
 	return ""
 }
 
 func (a *app) rail(c *ui.Context, bar ui.TitleBar) {
+	items := []m3.NavItem{
+		{ID: pageHome, Label: "Home", Icon: m3.IconHome, Selected: m3.IconHomeFilled},
+		{ID: pageSearch, Label: "Search", Icon: m3.IconSearch, Selected: m3.IconSearch},
+		{ID: pageExplore, Label: "Explore", Icon: m3.IconExplore, Selected: m3.IconExploreFilled},
+		{ID: pageLibrary, Label: "Library", Icon: m3.IconLibrary, Selected: m3.IconLibraryFilled},
+	}
+	if a.signedIn {
+		// The recap is built from the account's play history, so it is only
+		// offered once there is one.
+		items = append(items, m3.NavItem{ID: pageRecap, Label: "Recap", Icon: m3.IconTrending, Selected: m3.IconTrending})
+	}
 	event := m3.Rail(c, m3.RailSpec{
-		Items: []m3.NavItem{
-			{ID: pageHome, Label: "Home", Icon: m3.IconHome, Selected: m3.IconHomeFilled},
-			{ID: pageSearch, Label: "Search", Icon: m3.IconSearch, Selected: m3.IconSearch},
-			{ID: pageExplore, Label: "Explore", Icon: m3.IconExplore, Selected: m3.IconExploreFilled},
-			{ID: pageLibrary, Label: "Library", Icon: m3.IconLibrary, Selected: m3.IconLibraryFilled},
-		},
+		Items:    items,
 		Footer:   []m3.NavItem{{ID: pageSettings, Label: "Settings", Icon: m3.IconSettings, Selected: m3.IconSettings}},
 		Selected: navPage(a.router.Path()),
 		Expanded: a.settings.RailExpanded,
@@ -153,6 +159,8 @@ func (a *app) pageTitle(now time.Time) string {
 		return "Explore"
 	case "/library":
 		return "Library"
+	case "/recap":
+		return "Recap"
 	case "/search":
 		return "Search"
 	case "/settings":
@@ -201,6 +209,9 @@ func (a *app) page(c *ui.Context) {
 		case r.Match("/library"):
 			r.Title("Library")
 			a.libraryPage(c)
+		case r.Match("/recap"):
+			r.Title("Recap")
+			a.recapPage(c)
 		case r.Match("/search"):
 			r.Title("Search")
 			a.searchPage(c)

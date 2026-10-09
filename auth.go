@@ -149,9 +149,10 @@ func (a *app) submitSignIn() {
 	a.signIn.busy, a.signIn.err = true, ""
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	a.signIn.cancel = cancel
+	channel := a.settings.Channel
 	a.run(func() {
 		defer cancel()
-		a.finishSignIn(ctx, cookie, attempt)
+		a.finishSignIn(ctx, cookie, attempt, channel)
 	})
 }
 
@@ -164,6 +165,7 @@ func (a *app) importSignIn(source importSource) {
 	a.signIn.busy, a.signIn.err = true, ""
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	a.signIn.cancel = cancel
+	channel := a.settings.Channel
 	a.run(func() {
 		defer cancel()
 		cookie, err := source.read(ctx)
@@ -175,23 +177,80 @@ func (a *app) importSignIn(source importSource) {
 			})
 			return
 		}
-		a.finishSignIn(ctx, cookie, attempt)
+		a.finishSignIn(ctx, cookie, attempt, channel)
+	})
+}
+
+// accountClient builds the authenticated client for a channel selection. An
+// empty channel acts as the account's default one.
+func (a *app) accountClient(cookie, channel string) (*youtube.Client, error) {
+	auth, err := youtube.NewCookieAuth(cookie, youtube.CookieOptions{OnBehalfOfUser: channel})
+	if err != nil {
+		return nil, err
+	}
+	return a.newClient(auth), nil
+}
+
+// openAccount signs in with cookie and returns the client, the account, and
+// the channel in use. It tries the wanted channel first, and falls back to the
+// account's default when that channel is gone.
+func (a *app) openAccount(ctx context.Context, cookie, channel string) (*youtube.Client, *youtube.AccountDetails, string, error) {
+	client, err := a.accountClient(cookie, channel)
+	if err != nil {
+		return nil, nil, channel, err
+	}
+	details, err := client.GetAccountDetails(ctx)
+	if err != nil && channel != "" {
+		channel = ""
+		if client, err = a.accountClient(cookie, ""); err != nil {
+			return nil, nil, channel, err
+		}
+		details, err = client.GetAccountDetails(ctx)
+	}
+	if err != nil {
+		return nil, nil, channel, err
+	}
+	if err := validateAccountDetails(details); err != nil {
+		return nil, nil, channel, err
+	}
+	return client, details, channel, nil
+}
+
+// accountChannels reads the channels an authenticated client can act as, and
+// gives none when the request fails.
+func accountChannels(ctx context.Context, client *youtube.Client) []youtube.AccountChannel {
+	list, err := client.GetAccounts(ctx)
+	if err != nil || list == nil {
+		return nil
+	}
+	return list.Items
+}
+
+// loadAccountChannels fills the channel switcher after the account is in use,
+// so a slow channel list does not hold up the sign-in.
+func (a *app) loadAccountChannels(client *youtube.Client) {
+	if client == nil {
+		return
+	}
+	a.run(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		accounts := accountChannels(ctx, client)
+		if len(accounts) == 0 {
+			return
+		}
+		a.update(func() {
+			if a.authed == client {
+				a.accounts = accounts
+			}
+		})
 	})
 }
 
 // finishSignIn asks YouTube whom the cookie signs in and, when it takes it,
 // keeps it as the sign-in. It runs off the main thread.
-func (a *app) finishSignIn(ctx context.Context, cookie string, attempt uint64) {
-	auth, err := youtube.NewCookieAuth(cookie, youtube.CookieOptions{})
-	var client *youtube.Client
-	var details *youtube.AccountDetails
-	if err == nil {
-		client = a.newClient(auth)
-		details, err = client.GetAccountDetails(ctx)
-	}
-	if err == nil {
-		err = validateAccountDetails(details)
-	}
+func (a *app) finishSignIn(ctx context.Context, cookie string, attempt uint64, channel string) {
+	client, details, channel, err := a.openAccount(ctx, cookie, channel)
 	if err == nil {
 		err = a.saveSignIn(ctx, cookie, attempt)
 	}
@@ -206,9 +265,57 @@ func (a *app) finishSignIn(ctx context.Context, cookie string, attempt uint64) {
 		}
 		a.accountGen++
 		a.authed, a.signedIn, a.account = client, true, *details
+		a.accounts = nil
+		if a.settings.Channel != channel {
+			a.settings.Channel = channel
+			a.saveSettings()
+		}
 		a.ytDlpCookie = cookie
 		a.signIn = signInState{}
 		a.onSignedIn()
+		a.loadAccountChannels(client)
+	})
+}
+
+// switchAccount makes the session act as another of the account's channels and
+// reloads the page, so it shows that channel's account. It runs off the main
+// thread because it asks YouTube about the chosen channel.
+func (a *app) switchAccount(channel string) {
+	if channel == a.settings.Channel {
+		return
+	}
+	cookie := a.ytDlpCookie
+	if cookie == "" {
+		return
+	}
+	a.settings.Channel = channel
+	a.saveSettings()
+	gen := a.accountGen
+	a.run(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		auth, err := youtube.NewCookieAuth(cookie, youtube.CookieOptions{OnBehalfOfUser: channel})
+		if err != nil {
+			a.update(func() { a.notice = "Could not switch channel: " + err.Error() })
+			return
+		}
+		client := a.newClient(auth)
+		details, err := client.GetAccountDetails(ctx)
+		if err == nil {
+			err = validateAccountDetails(details)
+		}
+		if err != nil {
+			a.update(func() { a.notice = "Could not switch channel: " + err.Error() })
+			return
+		}
+		a.update(func() {
+			if gen != a.accountGen {
+				return // the user signed out while the channel was being opened
+			}
+			a.authed, a.account = client, *details
+			a.onSignedIn()
+			a.loadAccountChannels(client)
+		})
 	})
 }
 
@@ -226,6 +333,7 @@ func (a *app) restoreAccount() {
 		return
 	}
 	gen := a.accountGen
+	saved := a.settings.Channel
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -238,16 +346,7 @@ func (a *app) restoreAccount() {
 			}
 			return // not signed in
 		}
-		auth, err := youtube.NewCookieAuth(cookie, youtube.CookieOptions{})
-		if err != nil {
-			a.reportRestoreError(gen, err)
-			return
-		}
-		client := a.newClient(auth)
-		details, err := client.GetAccountDetails(ctx)
-		if err == nil {
-			err = validateAccountDetails(details)
-		}
+		client, details, channel, err := a.openAccount(ctx, cookie, saved)
 		if err != nil {
 			a.reportRestoreError(gen, err)
 			return
@@ -257,9 +356,14 @@ func (a *app) restoreAccount() {
 				return // the user signed in or out while the cookie was being read
 			}
 			a.authed, a.signedIn, a.account = client, true, *details
+			if a.settings.Channel != channel {
+				a.settings.Channel = channel
+				a.saveSettings()
+			}
 			a.ytDlpCookie = cookie
 			a.signIn.err = ""
 			a.onSignedIn()
+			a.loadAccountChannels(client)
 		})
 	})
 }
@@ -270,6 +374,7 @@ func (a *app) reportRestoreError(gen int, err error) {
 			return // the user signed in or out while the cookie was being read
 		}
 		a.authed, a.signedIn, a.account = nil, false, youtube.AccountDetails{}
+		a.accounts = nil
 		a.ytDlpCookie = ""
 		a.signIn.err = "Could not restore your YouTube Music session: " + err.Error()
 		a.notice = a.signIn.err
@@ -278,6 +383,7 @@ func (a *app) reportRestoreError(gen int, err error) {
 
 // signOut forgets the account.
 func (a *app) signOut() {
+	a.cancelSuggestions()
 	a.accountGen++
 	a.signInAttempt.Add(1)
 	if a.signIn.cancel != nil {
@@ -285,6 +391,7 @@ func (a *app) signOut() {
 	}
 	a.signIn = signInState{}
 	a.authed, a.signedIn, a.account = nil, false, youtube.AccountDetails{}
+	a.accounts = nil
 	a.ytDlpCookie = ""
 	a.onSignedIn()
 	if a.store == nil {
@@ -409,6 +516,7 @@ func (a *app) accountButton(c *ui.Context) {
 				}
 			})
 			ui.Divider(c)
+			a.channelItems(c)
 		}
 		if m3.MenuItem(c, "Settings", m3.IconSettings).Clicked() {
 			a.menuOpen = false
@@ -424,4 +532,37 @@ func (a *app) accountButton(c *ui.Context) {
 			a.signInWithGoogle()
 		}
 	})
+}
+
+// channelItems lists the channels the account can act as. It shows nothing
+// when there is only one, and marks the one in use.
+func (a *app) channelItems(c *ui.Context) {
+	if len(a.accounts) < 2 {
+		return
+	}
+	sc := m3.Active().Scheme
+	m3.Text(c, m3.LabelMedium, "Channel").Padding(12, 12, 4).TextColor(sc.OnSurfaceVariant)
+	for _, channel := range a.accounts {
+		name := channel.Name
+		if name == "" {
+			name = channel.Handle
+		}
+		row := ui.ButtonBase(c.Key("channel-" + channel.ChannelID))
+		row.Height(48).PaddingX(12).Gap(12).AlignItems(ui.Center).Radius(m3.Medium).Cursor(ui.CursorPointer).Label(name).
+			Background(m3.StateFill(ui.Transparent, sc.OnSurface, row.Hovered(), row.Pressed(), row.FocusVisible()))
+		selected := channel.ChannelID == a.settings.Channel
+		row.Children(func() {
+			if selected {
+				ui.Icon(c, m3.IconCheck).FontSize(22).TextColor(sc.Primary)
+			} else {
+				ui.Box(c).Size(22, 22)
+			}
+			m3.Text(c, m3.BodyLarge, name).Grow(1).SingleLine().TextColor(sc.OnSurface)
+		})
+		if row.Clicked() && !selected {
+			a.menuOpen = false
+			a.switchAccount(channel.ChannelID)
+		}
+	}
+	ui.Divider(c)
 }

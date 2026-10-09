@@ -21,6 +21,7 @@ const (
 	pageHome     = "home"
 	pageExplore  = "explore"
 	pageLibrary  = "library"
+	pageRecap    = "recap"
 	pageSearch   = "search"
 	pageSettings = "settings"
 )
@@ -58,6 +59,12 @@ type searchState struct {
 	query     string
 	submitted string
 	kind      int
+	// suggestions are the completions of the text being typed. suggestSeq
+	// numbers the request that asked for them, so a slow answer to an earlier
+	// query is dropped, and suggestCancel stops a pending request.
+	suggestions   []string
+	suggestSeq    int
+	suggestCancel func()
 }
 
 // rowKind says what a row of a page's list holds.
@@ -114,6 +121,9 @@ func (a *app) onNavigate() {
 	a.npOpen = false
 
 	path := a.router.Path()
+	if path != "/search" {
+		a.cancelSuggestions()
+	}
 	switch {
 	case path == "/home":
 		a.detail = detail{}
@@ -125,6 +135,11 @@ func (a *app) onNavigate() {
 		a.detail = detail{}
 		if a.signedIn {
 			a.loadFeed(pageLibrary)
+		}
+	case path == "/recap":
+		a.detail = detail{}
+		if a.signedIn {
+			a.loadFeed(pageRecap)
 		}
 	case path == "/search":
 		a.detail = detail{}
@@ -164,6 +179,8 @@ func (a *app) loadFeed(page string) {
 			return client.GetHomeFeed(ctx)
 		case pageExplore:
 			return client.GetExplore(ctx)
+		case pageRecap:
+			return client.GetRecap(ctx)
 		default:
 			return client.GetAllLibrary(ctx)
 		}
@@ -241,6 +258,7 @@ func (a *app) jobContext() context.Context {
 // is the only way a search starts: typing in the field never does.
 func (a *app) runSearch(query string) {
 	query = strings.TrimSpace(query)
+	a.cancelSuggestions()
 	if query == "" {
 		a.search = searchState{kind: a.search.kind}
 		return
@@ -468,6 +486,8 @@ func (a *app) playbackQueueOptions(index int) (youtube.UpNextOptions, string) {
 			source = "Explore"
 		case "/library":
 			source = "Your library"
+		case "/recap":
+			source = "Your recap"
 		case "/search":
 			source = "Search results"
 		}

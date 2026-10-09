@@ -126,7 +126,7 @@ func (a *app) ensureUpNext() {
 		var result *youtube.BrowseResult
 		var err error
 		if continuation == "" {
-			result, err = client.GetUpNextWithOptions(ctx, options)
+			result, err = client.GetUpNext(ctx, options)
 		} else {
 			result, err = client.ContinueUpNext(ctx, options, continuation)
 		}
