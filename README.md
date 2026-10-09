@@ -1,31 +1,80 @@
 # Meiro
 
-A small, fast desktop client for YouTube Music.
+A native desktop player for YouTube Music. Meiro draws its own interface in a
+native window instead of using a Chromium-based web front end.
 
-Meiro draws its own native window, so it opens at once, and it needs no
-browser engine behind it. Download it and play: everything it needs comes in
-the box.
+## Features
+
+- **Browse.** View your Home feed and Explore, then open artist, album, and
+  playlist pages. Sign in to view your Library.
+- **Search.** Search across all result types or filter by songs, albums,
+  artists, playlists, and videos. Meiro keeps your eight most recent searches.
+- **Play.** Play tracks from feeds, search results, and playlists. Seek, adjust
+  the volume, move to the previous or next track, shuffle, and repeat the
+  current track or queue.
+  After you select a track, the compact player stays available while you
+  browse. Open the full player to view the queue, lyrics, and related tracks.
+- **Auto-play.** Auto-play is on by default. It adds YouTube Music
+  recommendations after the current queue ends. Toggle it in the queue.
+- **Choose an appearance.** Follow the system theme, or choose light or dark.
+  Pick a Material 3 palette, adjust its hue, or use the current track's artwork
+  to set the app colours.
+- **Cache recent audio.** Meiro caches ten recently played tracks by default.
+  Choose a different limit and folder. Cached MP3 files go in a private cache
+  folder. Set the limit to `0` to turn off the cache.
+- **Use keyboard shortcuts.** Press Space to play or pause. Use Command on
+  macOS or Ctrl on Linux with Left or Right to change tracks. Use K or F to
+  open Search, and Comma to open Settings.
+- **Use system media controls.** Control playback from macOS Now Playing or a
+  Linux MPRIS client. Meiro publishes track details, cover art, and playback
+  state. It accepts play, pause, stop, previous, next, seek, volume, shuffle,
+  and repeat commands.
+
+Browse and play public music without signing in. Meiro imports a browser
+session to show your personalized Home feed and Library.
+
+## Screenshots
+
+These screenshots show real pages from a signed-in YouTube Music session.
+Explore is shown in a compact window, with Trending below the visible area.
 
 <p align="center">
-  <img src="docs/screenshots/home.png" alt="Meiro's home page" width="900">
+  <img src="docs/screenshots/home.png" alt="Home page with personalized recommendations" width="900">
 </p>
-
-## What you get
-
-- Your YouTube Music home, explore feeds, search, albums, playlists and
-  artists, and your own library when you sign in.
-- A player that floats over the page and opens into a full-screen view with
-  the queue and the lyrics.
-- System playback controls through Now Playing on macOS and MPRIS on Linux.
-- A look that follows [Material 3 Expressive](https://m3.material.io/blog/building-with-m3-expressive),
-  in light or dark, in any colour you choose, or in the colours of the cover
-  that is playing.
 
 <p align="center">
-  <img src="docs/screenshots/now-playing.png" alt="The full-screen player" width="32%">
-  <img src="docs/screenshots/home-dark.png" alt="The home page in dark mode" width="32%">
-  <img src="docs/screenshots/settings.png" alt="Choosing a colour in the settings" width="32%">
+  <img src="docs/screenshots/explore.png" alt="Compact Explore page showing new albums and top songs, with Trending below the window" width="900">
 </p>
+
+<table>
+  <tr>
+    <th>Library</th>
+    <th>Search</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/library.png" alt="Signed-in library with saved music" width="480"></td>
+    <td><img src="docs/screenshots/search.png" alt="Search results for Yorushika with category filters" width="480"></td>
+  </tr>
+  <tr>
+    <td>Saved playlists and artists from the signed-in account.</td>
+    <td>Search results with filters for songs, albums, artists, playlists, and videos.</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <th>Artist</th>
+    <th>Playlist</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/artist.png" alt="Yorushika artist page with top songs" width="480"></td>
+    <td><img src="docs/screenshots/playlist.png" alt="Playlist detail page with its track list" width="480"></td>
+  </tr>
+  <tr>
+    <td>An artist page with its top songs.</td>
+    <td>A playlist page with playback controls and tracks.</td>
+  </tr>
+</table>
 
 ## Install
 
@@ -41,32 +90,40 @@ notarized by Apple yet, so the first time, right-click it and choose **Open**
 
 ## Signing in
 
-Public music works without an account. To see your own home page and
-library, sign in at music.youtube.com in your browser, then choose **Sign in**
-in Meiro and pick that browser. Meiro imports a reusable browser session, not
-an app-scoped OAuth token; it has the same account access as that browser
-session. Meiro stores it in the system credential store where available. If
-the system has no credential store, it uses a file readable only by your user.
-A locked or failing credential store does not cause that fallback. **Sign out**
-removes Meiro's saved copy.
+To see your personalized Home feed and Library, sign in at
+[music.youtube.com](https://music.youtube.com) in a supported browser. In Meiro,
+choose **Sign in** and select that browser. Meiro imports the browser's YouTube
+Music session. It does not use an app-scoped OAuth token, so it has the same
+account access as the browser session.
+
+Meiro can import from Chrome, Safari, Firefox, Brave, or Edge. It can also
+import from Helium when it finds a browser profile.
+
+Meiro stores the session in the system credential store where available. If
+the system has no credential store, Meiro uses a file that only your user can
+read. A locked or failing credential store does not trigger this fallback.
+Choose **Sign out** to remove Meiro's saved session.
+
+Public browsing and playback do not need an account.
 
 ## Build it yourself
 
-You need [Go](https://go.dev/dl/) and [just](https://just.systems/).
+You need the Go version listed in [`go.mod`](go.mod) and
+[just](https://just.systems/).
 
 ```sh
-just dev     # run with live reload, using ffmpeg and yt-dlp from your PATH
-just run     # build the production app, with its tools inside, and open it
+just dev     # run with live reload; ffmpeg and yt-dlp must be on PATH
+just run     # build the production app with bundled tools, then open it
 ```
 
-`just` lists the rest. Releases are built by pushing a version tag; see
-`.github/workflows/release.yml`.
+Run `just` to list the other commands. The release workflow builds macOS
+Apple Silicon and Intel apps, plus Linux `amd64` and `arm64` packages. See
+[`.github/workflows/release.yml`](.github/workflows/release.yml).
 
 ## Credits
 
 - [MyGo](https://mygo.egoist.dev/) by [EGOIST](https://github.com/egoist),
-  the framework that draws Meiro's native window, and the reason it needs no
-  web frontend.
+  the framework that draws Meiro's native window and interface.
 - [ffmpeg](https://github.com/jellyfin/jellyfin-ffmpeg) decodes the audio,
   and [yt-dlp](https://github.com/yt-dlp/yt-dlp) finds the streams. Both
   ship inside the app; see
