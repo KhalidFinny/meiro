@@ -368,7 +368,7 @@ func resolveStream(ctx context.Context, client *youtube.Client, item youtube.Mus
 			}
 			if format, ok := info.BestAudioFormat(); ok {
 				log.Printf("playback: YouTube resolved video_id=%s itag=%d mime=%s", item.VideoID, format.Itag, format.MimeType)
-				return format.PlayableURL(), parseDuration(info.VideoDetails.Length), nil
+				return format.PlayableURL(), parseLengthSeconds(info.VideoDetails.Length), nil
 			}
 			err = errors.New("no audio format could be read")
 		}
@@ -563,6 +563,16 @@ func parseFFmpegDuration(output string) time.Duration {
 		return time.Duration((hours*3600 + minutes*60 + seconds) * float64(time.Second))
 	}
 	return 0
+}
+
+// parseLengthSeconds reads a length in whole seconds, as YouTube's
+// lengthSeconds reports it; 0 if it reads as none.
+func parseLengthSeconds(text string) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(text))
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // advance plays the next track of the queue, waiting for recommendations at
