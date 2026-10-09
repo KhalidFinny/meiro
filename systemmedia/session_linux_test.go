@@ -69,7 +69,7 @@ func TestMPRISSessionPublishesStateAndForwardsCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	object := client.Object(linux.busName, objectPath)
 
 	var metadata map[string]dbus.Variant
