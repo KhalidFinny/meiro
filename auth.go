@@ -330,7 +330,7 @@ func (a *app) signInDialog(c *ui.Context) {
 			ui.Icon(c, m3.IconLogin).FontSize(28).TextColor(sc.OnPrimaryContainer)
 		})
 		m3.EmphasizedText(c, m3.HeadlineSmall, "Sign in to YouTube Music")
-		m3.Text(c, m3.BodyMedium, "YouTube Music serves your home page and library to a browser that is signed in, so Meiro borrows its session. Sign in at music.youtube.com in your browser first, then pick it:").TextColor(sc.OnSurfaceVariant)
+		m3.Text(c, m3.BodyMedium, "Meiro imports your browser's reusable YouTube session, which gives it the same account access as that browser. Sign in at music.youtube.com in your browser first, then pick it:").TextColor(sc.OnSurfaceVariant)
 		ui.Link(c, musicURL, "Open YouTube Music").TextColor(sc.Primary)
 		picker := m3.Button(c, m3.ButtonSpec{Label: "Import from a browser", Icon: m3.IconExpandMore, Kind: m3.Tonal, Size: m3.Medium56, Disabled: a.signIn.busy, Key: "import-from"})
 		if picker.Clicked() {
@@ -344,7 +344,8 @@ func (a *app) signInDialog(c *ui.Context) {
 				}
 			}
 		})
-		m3.Text(c, m3.BodyMedium, "Or paste the value of the Cookie request header of a request to music.youtube.com, from your browser's developer tools. The session stays in your system keychain.").TextColor(sc.OnSurfaceVariant)
+		m3.Text(c, m3.BodyMedium, "Meiro saves the session in your system credential store. If your system has no credential store, it uses a file readable only by your user. A locked or failing credential store will not trigger that fallback. Sign out to remove Meiro's saved copy.").TextColor(sc.OnSurfaceVariant)
+		m3.Text(c, m3.BodyMedium, "You can also paste the Cookie request header for music.youtube.com from your browser's developer tools.").TextColor(sc.OnSurfaceVariant)
 		box := ui.Column(c.Key("cookie-box")).Padding(12, 16).Radius(m3.Large).Background(sc.SurfaceContainerHighest)
 		if box.FocusWithin() {
 			box.Border(2, sc.Primary)

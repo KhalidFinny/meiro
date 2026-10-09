@@ -211,42 +211,51 @@ func (s *keychainStore) forgetLegacy(ctx context.Context) {
 }
 
 func (s *keychainStore) Load(ctx context.Context) (string, error) {
-	var systemErr error
 	if s.system.available() {
 		value, err := s.system.get(ctx)
 		if err == nil {
+			if err := s.file.Delete(ctx); err != nil {
+				return "", fmt.Errorf("remove the obsolete sign-in file: %w", err)
+			}
 			return value, nil
 		}
 		if !errors.Is(err, errSecretNotFound) {
-			systemErr = err
+			// Do not read a weaker file copy when the system store refuses
+			// access (for example, while it is locked). Make the user unlock
+			// the store rather than silently downgrading credential protection.
+			return "", err
 		}
 	}
-	// The system store holds nothing, or would not answer, as a locked
-	// keychain will not: a run whose store refused the cookie may have left
-	// it in the file. Finding it there moves it into the store.
+	// Use the private-permissions file only on systems without a credential
+	// store. A stale file is migrated when a store becomes available again.
 	cookie, err := s.file.Load(ctx)
 	if err != nil {
-		if systemErr != nil && errors.Is(err, errNotSignedIn) {
-			return "", systemErr
-		}
 		return "", err
 	}
 	if s.system.available() {
-		if err := s.system.set(ctx, cookie); err == nil {
-			_ = s.file.Delete(ctx)
+		if err := s.system.set(ctx, cookie); err != nil {
+			return "", err
 		}
+		if err := s.file.Delete(ctx); err != nil {
+			return "", fmt.Errorf("remove the obsolete sign-in file: %w", err)
+		}
+		return cookie, nil
 	}
 	return cookie, nil
 }
 
 func (s *keychainStore) Save(ctx context.Context, cookie string) error {
 	if s.system.available() {
-		if err := s.system.set(ctx, cookie); err == nil {
-			// The cookie does not belong in the file once the system
-			// store has it.
-			_ = s.file.Delete(ctx)
-			return nil
+		if err := s.system.set(ctx, cookie); err != nil {
+			// Do not put a reusable browser session in a weaker file just
+			// because the system store is locked or failed unexpectedly.
+			return err
 		}
+		// The cookie does not belong in the file once the system store has it.
+		if err := s.file.Delete(ctx); err != nil {
+			return fmt.Errorf("remove the obsolete sign-in file: %w", err)
+		}
+		return nil
 	}
 	return s.file.Save(ctx, cookie)
 }

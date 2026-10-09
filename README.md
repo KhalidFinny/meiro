@@ -42,8 +42,12 @@ notarized by Apple yet, so the first time, right-click it and choose **Open**
 
 Public music works without an account. To see your own home page and
 library, sign in at music.youtube.com in your browser, then choose **Sign in**
-in Meiro and pick that browser. Meiro borrows that session, keeps it in your
-system's keychain, and **Sign out** removes it.
+in Meiro and pick that browser. Meiro imports a reusable browser session, not
+an app-scoped OAuth token; it has the same account access as that browser
+session. Meiro stores it in the system credential store where available. If
+the system has no credential store, it uses a file readable only by your user.
+A locked or failing credential store does not cause that fallback. **Sign out**
+removes Meiro's saved copy.
 
 ## Build it yourself
 

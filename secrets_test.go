@@ -100,33 +100,35 @@ func TestCookieGoToTheSystemStore(t *testing.T) {
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Error("the cookie were also written to the file")
 	}
+	// A cookie file left by an earlier version is removed even when the
+	// system store already has the credential.
+	if err := newFileStore(path).Save(ctx, testCookie); err != nil {
+		t.Fatal(err)
+	}
 	cookie, err := store.Load(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cookie != testCookie {
 		t.Errorf("loaded %q", cookie)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Error("the obsolete file copy remains after loading from the system store")
 	}
 }
 
-func TestCookieFallBackToTheFile(t *testing.T) {
+func TestCookieSaveDoesNotFallBackWhenTheSystemStoreFails(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "cookie.txt")
-	system := &fakeKeychain{usable: true, setErr: errors.New("the keychain is locked")}
+	storeErr := errors.New("the keychain is locked")
+	system := &fakeKeychain{usable: true, setErr: storeErr}
 	store := &keychainStore{system: system, file: newFileStore(path)}
 
-	if err := store.Save(ctx, testCookie); err != nil {
-		t.Fatal(err)
+	if err := store.Save(ctx, testCookie); !errors.Is(err, storeErr) {
+		t.Fatalf("Save error = %v, want the keychain error", err)
 	}
-	if _, err := os.Stat(path); err != nil {
-		t.Errorf("the cookie did not reach the file: %v", err)
-	}
-	cookie, err := store.Load(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cookie != testCookie {
-		t.Errorf("loaded %q", cookie)
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("failed keychain save wrote a weaker file copy: %v", err)
 	}
 }
 
@@ -147,35 +149,24 @@ func TestCookieFallBackWithoutAStore(t *testing.T) {
 	}
 }
 
-func TestCookieFallBackToTheFileWhenTheStoreWillNotAnswer(t *testing.T) {
+func TestCookieLoadDoesNotFallBackWhenTheSystemStoreWillNotAnswer(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "cookie.txt")
 	file := newFileStore(path)
 	if err := file.Save(ctx, testCookie); err != nil {
 		t.Fatal(err)
 	}
-	// A locked keychain refuses the read, which must not sign the user out
-	// of the cookie the file still holds.
-	system := &fakeKeychain{usable: true, getErr: errors.New("the keychain is locked")}
+	// A locked keychain must not silently cause the less-protected file copy
+	// to be used instead.
+	storeErr := errors.New("the keychain is locked")
+	system := &fakeKeychain{usable: true, getErr: storeErr}
 	store := &keychainStore{system: system, file: file}
 
-	cookie, err := store.Load(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cookie != testCookie {
-		t.Errorf("loaded %q", cookie)
-	}
-}
-
-func TestCookieLoadReportsStoreFailureWithoutFallback(t *testing.T) {
-	storeErr := errors.New("the keychain is locked")
-	store := &keychainStore{
-		system: &fakeKeychain{usable: true, getErr: storeErr},
-		file:   newFileStore(filepath.Join(t.TempDir(), "cookie.txt")),
-	}
-	if _, err := store.Load(context.Background()); !errors.Is(err, storeErr) {
+	if _, err := store.Load(ctx); !errors.Is(err, storeErr) {
 		t.Fatalf("Load error = %v, want the keychain error", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the untrusted fallback file was unexpectedly removed: %v", err)
 	}
 }
 
