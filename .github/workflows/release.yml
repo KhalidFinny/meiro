@@ -1,30 +1,85 @@
 name: Release
 
-# Push a tag such as v0.2.0 to build the app for every platform and publish
-# it as a GitHub release. Run it by hand to build without publishing.
+# Publish a GitHub release for a tag such as v0.2.0. It runs only after the
+# CI workflow passes on that tag's commit, so no release builds from
+# unchecked code. Run it by hand to build without publishing.
 on:
-  push:
-    tags: ["v*"]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  test:
+  # Refuse to build unless the CI run that triggered this tested the exact
+  # commit a version tag points at. Any other CI completion (a branch push,
+  # a pull request) ends here with nothing to release.
+  gate:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve the tested commit
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run: building without publishing."
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          fetch-depth: 0
+      - name: Find the version tag on the tested commit
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tags="$(git tag --points-at HEAD --list 'v*')"
+          count="$(echo "$tags" | grep -c . || true)"
+          if [ "$count" = "0" ]; then
+            echo "No version tag on ${{ steps.resolve.outputs.sha }}; nothing to release."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+          elif [ "$count" != "1" ]; then
+            echo "Several version tags point at this commit; refusing an ambiguous release:"
+            echo "$tags"
+            exit 1
+          else
+            echo "tag=$tags" >> "$GITHUB_OUTPUT"
+            echo "version=${tags#v}" >> "$GITHUB_OUTPUT"
+            echo "Releasing $tags"
+          fi
+
+  version:
+    needs: gate
+    if: needs.gate.outputs.tag != ''
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
         with:
-          go-version-file: go.mod
-      - name: Install GTK
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-0
-      - run: go vet ./...
-      - run: go test -race ./...
+          ref: ${{ needs.gate.outputs.sha }}
+      - name: Check the tag matches mygo.json
+        run: |
+          want="v$(jq -r .version mygo.json)"
+          test "${{ needs.gate.outputs.tag }}" = "$want" || {
+            echo "Tag ${{ needs.gate.outputs.tag }} does not match mygo.json version $want."
+            exit 1
+          }
+          echo "Version OK: ${{ needs.gate.outputs.version }}"
 
   build:
-    needs: test
+    needs: [gate, version]
     strategy:
       fail-fast: false
       matrix:
@@ -35,15 +90,17 @@ jobs:
           - { platform: linux-arm64, target: linux/arm64, os: ubuntu-latest }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
       # The tag is the version: v1.2.3 builds as 1.2.3.
       - name: Set the version
         run: |
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="${GITHUB_REF_NAME#v}"; else version="0.0.0"; fi
+          version="${{ needs.gate.outputs.version }}"
           echo "VERSION=$version" >> "$GITHUB_ENV"
           jq --arg v "$version" '.version = $v' mygo.json > mygo.json.new
           mv mygo.json.new mygo.json
@@ -80,20 +137,20 @@ jobs:
           esac
           ls -la artifacts
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: meiro-${{ matrix.platform }}
           path: artifacts/*
           if-no-files-found: error
 
   release:
-    if: github.ref_type == 'tag'
-    needs: build
+    if: needs.gate.outputs.tag != ''
+    needs: [gate, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
           merge-multiple: true
@@ -103,4 +160,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" artifacts/* --title "Meiro ${GITHUB_REF_NAME#v}" --generate-notes --verify-tag
+        run: gh release create "${{ needs.gate.outputs.tag }}" artifacts/* --title "Meiro ${{ needs.gate.outputs.version }}" --generate-notes --verify-tag

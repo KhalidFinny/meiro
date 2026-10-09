@@ -1,0 +1,136 @@
+# Checks every change before it can release. Each check runs as its own
+# job, so they all run at the same time, and the release workflow waits
+# for all of them through the checks gate below.
+name: CI
+
+on:
+  push:
+    branches: ["master"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GOLANGCI_LINT_VERSION: v2.14.0
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Check formatting
+        run: |
+          test -z "$(gofmt -l .)" || { echo "Unformatted files:"; gofmt -l .; exit 1; }
+          test -z "$(go tool gofumpt -l .)" || { echo "Files needing gofumpt:"; go tool gofumpt -l .; exit 1; }
+
+  tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Check go.mod and go.sum are tidy
+        run: |
+          go mod tidy -diff
+          git diff --exit-code -- go.mod go.sum
+
+  vet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: ./...
+
+  cross-compile:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-amd64, goos: linux, goarch: amd64 }
+          - { name: linux-arm64, goos: linux, goarch: arm64 }
+          - { name: darwin-amd64, goos: darwin, goarch: amd64 }
+          - { name: darwin-arm64, goos: darwin, goarch: arm64 }
+          - { name: windows-amd64, goos: windows, goarch: amd64 }
+    runs-on: ubuntu-latest
+    name: build (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Compile
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build ./...
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test -race -count=1 ./...
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check shell scripts
+        run: |
+          shellcheck --severity=warning scripts/fetch-tools.sh scripts/package-linux.sh
+          bash -n scripts/fetch-tools.sh
+          bash -n scripts/package-linux.sh
+      - name: Check workflows
+        run: |
+          curl --fail --location --silent --show-error \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.9/actionlint_1.7.9_linux_amd64.tar.gz \
+            --output "$RUNNER_TEMP/actionlint.tar.gz"
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
+
+  # One gate for branch protection and the release workflow. It passes
+  # only when every check above passes, so a new check guards releases
+  # as soon as it is added to needs.
+  checks:
+    if: always()
+    needs: [format, tidy, vet, lint, cross-compile, test, scripts]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All checks must pass
+        run: |
+          # needs.<job>.result is one of success, failure, cancelled, skipped.
+          if [ "${{ needs.format.result }}" != "success" ] || \
+             [ "${{ needs.tidy.result }}" != "success" ] || \
+             [ "${{ needs.vet.result }}" != "success" ] || \
+             [ "${{ needs.lint.result }}" != "success" ] || \
+             [ "${{ needs.cross-compile.result }}" != "success" ] || \
+             [ "${{ needs.test.result }}" != "success" ] || \
+             [ "${{ needs.scripts.result }}" != "success" ]; then
+            echo "One or more checks failed."
+            exit 1
+          fi
+          echo "All checks passed."
