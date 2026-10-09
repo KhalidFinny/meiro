@@ -87,6 +87,7 @@ func (a *app) start(item youtube.MusicItem) {
 	a.player.Stop()
 	a.stream(item)
 	a.ensureUpNext()
+	a.syncSystemMedia()
 }
 
 // ensureUpNext fetches the initial queue at once, then asks for another page
@@ -231,6 +232,7 @@ func (a *app) enqueue(item youtube.MusicItem, playNext bool) {
 	} else {
 		a.notice = "Added " + item.Title + " to the queue"
 	}
+	a.syncSystemMedia()
 }
 
 // setAutoPlay changes whether generated tracks can follow the selected queue.
@@ -251,6 +253,7 @@ func (a *app) setAutoPlay(enabled bool) {
 		a.upNextOptions.VideoID = a.current.VideoID
 		a.ensureUpNext()
 	}
+	a.syncSystemMedia()
 }
 
 // loading reports whether the track chosen is not making sound yet: its audio
@@ -288,6 +291,7 @@ func (a *app) stream(item youtube.MusicItem) {
 			if err != nil {
 				log.Printf("playback: audio resolution failed video_id=%s: %v", item.VideoID, err)
 				a.playErr = err.Error()
+				a.syncSystemMedia()
 				return
 			}
 			if total > 0 {
@@ -296,6 +300,7 @@ func (a *app) stream(item youtube.MusicItem) {
 			if playerErr := a.player.Play(streamURL); playerErr != nil {
 				log.Printf("playback: player could not open video_id=%s: %v", item.VideoID, playerErr)
 				a.playErr = playerErr.Error()
+				a.syncSystemMedia()
 				return
 			}
 			source := "stream"
@@ -308,6 +313,7 @@ func (a *app) stream(item youtube.MusicItem) {
 				a.run(func() { cache.enqueue(videoID, cookie) })
 			}
 			a.warmNext()
+			a.syncSystemMedia()
 		})
 	})
 }
@@ -529,6 +535,7 @@ func (a *app) advance() {
 	if a.settings.AutoPlay && (a.upNextLoading || !a.upNextFetched || a.upNextToken != "") {
 		a.waitingForAuto = true
 		a.player.Stop()
+		a.syncSystemMedia()
 		a.ensureUpNext()
 		return
 	}
@@ -541,6 +548,7 @@ func (a *app) stopAtQueueEnd() {
 	a.streamGen++ // drop a track still being found
 	a.resolving = false
 	a.player.Stop()
+	a.syncSystemMedia()
 }
 
 // previous restarts the track, or plays the one before it when the track
@@ -548,6 +556,7 @@ func (a *app) stopAtQueueEnd() {
 func (a *app) previous() {
 	if a.index == 0 || a.player.Position() > 3*time.Second {
 		a.player.Seek(0)
+		a.syncSystemMedia()
 		return
 	}
 	a.index--
@@ -567,6 +576,7 @@ func (a *app) togglePlay() {
 		return
 	}
 	a.player.Toggle()
+	a.syncSystemMedia()
 }
 
 // clock formats a position as "3:42" or "1:02:03".
@@ -599,6 +609,7 @@ func (a *app) setVolume(v float64) {
 	a.volume = min(max(v, 0), 100)
 	a.player.SetVolume(a.volume / 100)
 	a.settings.Volume = a.volume
+	a.syncSystemMedia()
 }
 
 // toggleMute silences the player, or brings the volume back.
@@ -613,7 +624,10 @@ func (a *app) toggleMute() {
 
 // cycleRepeat goes from not repeating to repeating the queue to repeating the
 // track and back.
-func (a *app) cycleRepeat() { a.repeat = (a.repeat + 1) % (repeatTrack + 1) }
+func (a *app) cycleRepeat() {
+	a.repeat = (a.repeat + 1) % (repeatTrack + 1)
+	a.syncSystemMedia()
+}
 
 // lyricsState is the lyrics of the track playing, as far as they are loaded.
 type lyricsState struct {

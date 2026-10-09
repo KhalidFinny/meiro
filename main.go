@@ -24,6 +24,7 @@ import (
 
 	"github.com/elianiva/meiro/m3"
 	"github.com/elianiva/meiro/player"
+	"github.com/elianiva/meiro/systemmedia"
 	"github.com/elianiva/meiro/youtube"
 )
 
@@ -32,6 +33,7 @@ type app struct {
 	win                *mygo.Window
 	router             *ui.Router
 	player             *player.Player
+	systemMedia        systemmedia.Session
 	thumbs             *thumbCache
 	audioCache         *audioCache
 	retiredAudioCaches []*audioCache
@@ -246,11 +248,24 @@ func main() {
 			TitleBarStyle: mygo.TitleBarHidden,
 			Content:       ui.View(a.view),
 		})
+		session, err := systemmedia.New(a.systemMediaControls())
+		if err != nil {
+			log.Printf("system media controls unavailable: %v", err)
+		} else {
+			a.systemMedia = session
+			a.syncSystemMedia()
+		}
 		// Background work reaches the window through a.win, so it starts only
 		// once the window is there.
 		a.restoreAccount()
 	})
 	err := mygo.App.Run()
+	if a.systemMedia != nil {
+		if closeErr := a.systemMedia.Close(); closeErr != nil {
+			log.Printf("close system media controls: %v", closeErr)
+		}
+	}
+	a.player.Stop()
 	a.closeAudioCaches()
 	if err != nil {
 		log.Fatal(err)
@@ -428,6 +443,130 @@ func (a *app) refresh() {
 	}
 }
 
+// systemMediaControls maps operating-system commands to the app's playback
+// actions. Platform callbacks can arrive on another goroutine, so state
+// changes go through update before they touch the app.
+func (a *app) systemMediaControls() systemmedia.Controls {
+	return systemmedia.Controls{
+		Play: func() {
+			a.update(func() {
+				if a.resolving || a.player.Playing() {
+					return
+				}
+				if a.playErr != "" || !a.player.Active() || a.player.Ended() {
+					if a.current.VideoID != "" {
+						a.start(a.current)
+					}
+				} else {
+					a.player.Resume()
+				}
+				a.syncSystemMedia()
+			})
+		},
+		Pause: func() {
+			a.update(func() {
+				a.player.Pause()
+				a.syncSystemMedia()
+			})
+		},
+		Toggle: func() {
+			a.update(func() {
+				a.togglePlay()
+				a.syncSystemMedia()
+			})
+		},
+		Stop: func() {
+			a.update(func() { a.stopAtQueueEnd() })
+		},
+		Next: func() {
+			a.update(func() { a.advance() })
+		},
+		Previous: func() {
+			a.update(func() { a.previous() })
+		},
+		Seek: func(position time.Duration) {
+			a.update(func() {
+				a.player.Seek(position)
+				a.syncSystemMedia()
+			})
+		},
+		SetVolume: func(volume float64) {
+			a.update(func() {
+				a.setVolume(volume * 100)
+				a.saveSettings()
+				a.syncSystemMedia()
+			})
+		},
+		SetShuffle: func(shuffle bool) {
+			a.update(func() {
+				a.shuffle = shuffle
+				a.syncSystemMedia()
+			})
+		},
+		SetRepeat: func(status string) {
+			a.update(func() {
+				switch status {
+				case "Track":
+					a.repeat = repeatTrack
+				case "Playlist":
+					a.repeat = repeatQueue
+				default:
+					a.repeat = repeatOff
+				}
+				a.syncSystemMedia()
+			})
+		},
+	}
+}
+
+// syncSystemMedia publishes a snapshot of app-owned playback state. The
+// platform adapters throttle position updates to avoid flooding the OS.
+func (a *app) syncSystemMedia() {
+	if a.systemMedia == nil {
+		return
+	}
+	status := systemmedia.Stopped
+	if a.player.Playing() {
+		status = systemmedia.Playing
+	} else if a.player.Paused() {
+		status = systemmedia.Paused
+	}
+	position := time.Duration(0)
+	if a.player.Active() {
+		position = a.player.Position()
+	}
+	canNext := false
+	if a.current.VideoID != "" {
+		_, canNext = a.nextIndex()
+		if !canNext && a.settings.AutoPlay {
+			canNext = a.upNextLoading || !a.upNextFetched || a.upNextToken != ""
+		}
+	}
+	loopStatus := "None"
+	if a.repeat == repeatTrack {
+		loopStatus = "Track"
+	} else if a.repeat == repeatQueue {
+		loopStatus = "Playlist"
+	}
+	a.systemMedia.Update(systemmedia.State{
+		VideoID:     a.current.VideoID,
+		Title:       a.current.Title,
+		Artist:      a.current.Subtitle,
+		ArtworkURL:  a.current.Thumbnail,
+		Duration:    a.total,
+		Position:    position,
+		Status:      status,
+		LoopStatus:  loopStatus,
+		Volume:      a.volume / 100,
+		CanPlay:     a.current.VideoID != "",
+		CanPause:    a.player.Playing(),
+		CanNext:     canNext,
+		CanPrevious: a.current.VideoID != "",
+		CanSeek:     a.total > 0 && a.player.Active(),
+		Shuffle:     a.shuffle,
+	})
+}
+
 // resolveTheme returns the theme to draw this frame with: the one the
 // settings describe, glided to from the one before when it changed.
 func (a *app) resolveTheme(c *ui.Context) *m3.Theme {
@@ -469,6 +608,7 @@ func (a *app) tick(c *ui.Context) {
 	}
 	if failure := a.player.Failure(); failure != "" {
 		a.playErr = failure
+		a.syncSystemMedia()
 		return
 	}
 	if a.player.Ended() {
@@ -480,6 +620,7 @@ func (a *app) tick(c *ui.Context) {
 		if !a.scrubbing {
 			a.scrub = a.player.Position().Seconds()
 		}
+		a.syncSystemMedia()
 		c.After(250 * time.Millisecond)
 	}
 }

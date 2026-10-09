@@ -16,6 +16,7 @@ the box.
   artists, and your own library when you sign in.
 - A player that floats over the page and opens into a full-screen view with
   the queue and the lyrics.
+- System playback controls through Now Playing on macOS and MPRIS on Linux.
 - A look that follows [Material 3 Expressive](https://m3.material.io/blog/building-with-m3-expressive),
   in light or dark, in any colour you choose, or in the colours of the cover
   that is playing.

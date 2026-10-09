@@ -23,8 +23,14 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/elianiva/meiro/m3"
+	"github.com/elianiva/meiro/systemmedia"
 	"github.com/elianiva/meiro/youtube"
 )
+
+type captureSystemMedia struct{ state systemmedia.State }
+
+func (s *captureSystemMedia) Update(state systemmedia.State) { s.state = state }
+func (*captureSystemMedia) Close() error                     { return nil }
 
 // searches counts the search requests the fake YouTube has answered.
 var searches atomic.Int32
@@ -281,6 +287,34 @@ func TestPlayerBarShowsTheCurrentTrack(t *testing.T) {
 	tt.Key(0, ui.KeyEscape)
 	if a.npOpen {
 		t.Errorf("Escape did not close the full-screen player")
+	}
+}
+
+func TestSystemMediaCommandsUpdatePlaybackState(t *testing.T) {
+	a := newApp()
+	a.current = youtube.MusicItem{VideoID: "current", Title: "Current song", Subtitle: "An artist"}
+	a.queue = []youtube.MusicItem{a.current, {VideoID: "next", Title: "Next song"}}
+	a.total = 3 * time.Minute
+	a.volume = 60
+	media := &captureSystemMedia{}
+	a.systemMedia = media
+
+	a.syncSystemMedia()
+	if media.state.Title != "Current song" || media.state.Artist != "An artist" || !media.state.CanNext || media.state.Volume != 0.6 {
+		t.Fatalf("initial system media state = %+v", media.state)
+	}
+
+	controls := a.systemMediaControls()
+	controls.SetVolume(0.35)
+	controls.SetShuffle(true)
+	controls.SetRepeat("Playlist")
+	if a.volume != 35 || a.player.Volume() != 0.35 || !media.state.Shuffle || media.state.Volume != 0.35 || a.repeat != repeatQueue || media.state.LoopStatus != "Playlist" {
+		t.Errorf("media volume/shuffle/repeat did not reach the app and system state: app volume=%v player volume=%v repeat=%v state=%+v", a.volume, a.player.Volume(), a.repeat, media.state)
+	}
+	a.resolving = true
+	controls.Stop()
+	if a.resolving || media.state.Status != systemmedia.Stopped {
+		t.Errorf("media Stop left playback state resolving=%v status=%q", a.resolving, media.state.Status)
 	}
 }
 

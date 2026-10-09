@@ -23,6 +23,7 @@ func (a *app) transport(c *ui.Context, size float32, gap float32) {
 		spec.Icon, spec.Label, spec.Toggle, spec.Selected, spec.Key = m3.IconShuffle, "Shuffle", true, a.shuffle, "shuffle"
 		if m3.IconButton(c, spec).Clicked() {
 			a.shuffle = !a.shuffle
+			a.syncSystemMedia()
 		}
 		spec = small
 		spec.Icon, spec.Label, spec.Key = m3.IconPrevious, "Previous", "previous"
@@ -85,6 +86,7 @@ func (a *app) scrubber(c *ui.Context) {
 		if a.scrubbing && !slider.Pressed() {
 			a.scrubbing = false
 			a.player.Seek(time.Duration(a.scrub * float64(time.Second)))
+			a.syncSystemMedia()
 		}
 		m3.Text(c, m3.LabelMedium, clock(a.total)).Width(40).Shrink(0).TextColor(sc.OnSurfaceVariant).FontFeatures("tnum")
 	})
