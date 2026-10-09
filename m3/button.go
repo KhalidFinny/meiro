@@ -125,6 +125,23 @@ func newButtonBase(c *ui.Context, key any) ui.Element {
 	return ui.ButtonBase(c)
 }
 
+// fitLabel gives a button's label a little room beyond its measured width.
+// Linux can otherwise wrap a label whose box is exactly its intrinsic width,
+// then SingleLine truncates it with an ellipsis.
+func fitLabel(c *ui.Context, role Role, label string, emphasized bool, size float32) ui.Element {
+	weight := role.Weight
+	if emphasized {
+		weight = role.Emphasis
+	}
+	if size <= 0 {
+		size = role.Size
+	}
+	width, _ := c.MeasureText(0, ui.Span{
+		Text: label, Size: size, Weight: weight, LetterSpacing: role.Tracking,
+	})
+	return role.Style(ui.Text(c, label), emphasized).FontSize(size).Width(width + 1)
+}
+
 // Button builds a button: its label and icon sit in a container whose shape,
 // colour and state layers follow the active theme. A pressed button squares
 // off along a spring; a selected toggle settles into the other shape.
@@ -176,7 +193,7 @@ func Button(c *ui.Context, spec ButtonSpec) ui.Element {
 			ui.Icon(c, spec.Icon).FontSize(d.icon).TextColor(content)
 		}
 		if spec.Label != "" {
-			d.label.Style(ui.Text(c, spec.Label), true).TextColor(content).SingleLine()
+			fitLabel(c, d.label, spec.Label, true, 0).TextColor(content).SingleLine()
 		}
 	})
 	return b
@@ -360,7 +377,7 @@ func FAB(c *ui.Context, spec FABSpec) ui.Element {
 	b.Children(func() {
 		ui.Icon(c, spec.Icon).FontSize(icon).TextColor(content)
 		if spec.Label != "" {
-			LabelLarge.Style(ui.Text(c, spec.Label), true).TextColor(content).SingleLine().FontSize(16)
+			fitLabel(c, LabelLarge, spec.Label, true, 16).TextColor(content).SingleLine()
 		}
 	})
 	return b
@@ -385,7 +402,7 @@ func Chip(c *ui.Context, label string, selected bool, key any) ui.Element {
 		if selected {
 			ui.Icon(c, IconCheck).FontSize(18).TextColor(content)
 		}
-		LabelLarge.Style(ui.Text(c, label), false).TextColor(content).SingleLine()
+		fitLabel(c, LabelLarge, label, false, 0).TextColor(content).SingleLine()
 	})
 	return b
 }
@@ -426,7 +443,7 @@ func ButtonGroup(c *ui.Context, key any, selected *int, labels []string, icons [
 				if i < len(icons) && icons[i] != nil {
 					ui.Icon(c, icons[i]).FontSize(18).TextColor(content)
 				}
-				LabelLarge.Style(ui.Text(c, label), on).TextColor(content).SingleLine()
+				fitLabel(c, LabelLarge, label, on, 0).TextColor(content).SingleLine()
 			})
 		}
 	})

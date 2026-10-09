@@ -158,3 +158,33 @@ func TestCarouselVisibleRangeIncludesViewportAndPrefetch(t *testing.T) {
 		t.Errorf("end range = [%d, %d), want [20, 20)", first, last)
 	}
 }
+
+func TestFitLabelLeavesRoomPastItsIntrinsicWidth(t *testing.T) {
+	const label = "Shuffle"
+	var measured float32
+	tt := ui.NewTester(func(c *ui.Context) {
+		Provide(c, New(Config{}, false))
+		measured, _ = c.MeasureText(0, ui.Span{
+			Text: label, Size: LabelLarge.Size, Weight: LabelLarge.Emphasis,
+			LetterSpacing: LabelLarge.Tracking,
+		})
+		fitLabel(c, LabelLarge, label, true, 0).SingleLine().Label("fit-label")
+	}, 200, 50)
+	if bounds, ok := tt.Find("fit-label"); !ok || bounds.W <= measured {
+		t.Fatalf("fit label width = %v (found %v), measured text width = %v", bounds.W, ok, measured)
+	}
+}
+
+func TestExpandedRailItemsFillTheirRows(t *testing.T) {
+	tt := ui.NewTester(func(c *ui.Context) {
+		Provide(c, New(Config{}, false))
+		Rail(c, RailSpec{
+			Items: []NavItem{{ID: "home", Label: "Home"}}, Expanded: true,
+		})
+	}, 400, 300)
+	tt.SetPreferences(ui.Preferences{ReduceMotion: true, TextScale: 1})
+	tt.Frame()
+	if bounds, ok := tt.Find("Home"); !ok || bounds.W < RailExpanded-24 {
+		t.Fatalf("expanded Home row width = %v (found %v), want at least %v", bounds.W, ok, RailExpanded-24)
+	}
+}

@@ -240,9 +240,9 @@ func (a *app) card(c *ui.Context, item youtube.MusicItem, queue []youtube.MusicI
 				}
 			}
 		})
-		m3.EmphasizedText(c, m3.TitleSmall, item.Title).SingleLine().TextColor(sc.OnSurface).Margin(0, 4)
+		m3.EmphasizedText(c, m3.TitleSmall, item.Title).Width(cardArt-8).SingleLine().TextColor(sc.OnSurface).Margin(0, 4)
 		if item.Subtitle != "" {
-			m3.Text(c, m3.BodySmall, item.Subtitle).SingleLine().TextColor(sc.OnSurfaceVariant).Margin(-6, 4, 0)
+			m3.Text(c, m3.BodySmall, item.Subtitle).Width(cardArt-8).SingleLine().TextColor(sc.OnSurfaceVariant).Margin(-6, 4, 0)
 		}
 		// A menu the pointer opened points at the pointer; one the menu
 		// button opened points at the button.

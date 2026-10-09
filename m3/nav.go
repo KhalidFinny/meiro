@@ -43,7 +43,8 @@ func Rail(c *ui.Context, spec RailSpec) RailEvent {
 	var event RailEvent
 	rail := ui.Column(c).Key("m3-rail")
 	width := Animate(rail, "width", map[bool]float32{false: RailCollapsed, true: RailExpanded}[spec.Expanded], SpatialDefault)
-	rail.Width(max(width, RailCollapsed-8)).Shrink(0).FillHeight().ClipX().PaddingY(12).Gap(4)
+	railWidth := max(width, RailCollapsed-8)
+	rail.Width(railWidth).Shrink(0).FillHeight().ClipX().PaddingY(12).Gap(4)
 	align := ui.Center
 	if spec.Expanded {
 		align = ui.Start
@@ -65,13 +66,13 @@ func Rail(c *ui.Context, spec RailSpec) RailEvent {
 		}
 		ui.Box(c).Height(16)
 		for _, item := range spec.Items {
-			if navItem(c, item, item.ID == spec.Selected, spec.Expanded) {
+			if navItem(c, item, item.ID == spec.Selected, spec.Expanded, railWidth) {
 				event.Item = item.ID
 			}
 		}
 		ui.Spacer(c)
 		for _, item := range spec.Footer {
-			if navItem(c, item, item.ID == spec.Selected, spec.Expanded) {
+			if navItem(c, item, item.ID == spec.Selected, spec.Expanded, railWidth) {
 				event.Item = item.ID
 			}
 		}
@@ -79,7 +80,7 @@ func Rail(c *ui.Context, spec RailSpec) RailEvent {
 	return event
 }
 
-func navItem(c *ui.Context, item NavItem, selected, expanded bool) bool {
+func navItem(c *ui.Context, item NavItem, selected, expanded bool, railWidth float32) bool {
 	sc := Active().Scheme
 	b := ui.ButtonBase(c.Key("nav-" + item.ID))
 	icon := item.Icon
@@ -96,12 +97,12 @@ func navItem(c *ui.Context, item NavItem, selected, expanded bool) bool {
 		if selected {
 			fill = sc.SecondaryContainer
 		}
-		b.Height(56).PaddingX(16).Margin(0, 12).Gap(12).AlignItems(ui.Center).Radius(Full).
+		b.Width(railWidth-24).Height(56).PaddingX(16).Margin(0, 12).Gap(12).AlignItems(ui.Center).Radius(Full).
 			Background(StateFill(fill, sc.OnSurface, b.Hovered() && !selected, b.Pressed(), b.FocusVisible())).
 			TextColor(labelColor).Cursor(ui.CursorPointer).Transition(Fade(EffectsFast)).Label(item.Label)
 		b.Children(func() {
 			ui.Icon(c, icon).FontSize(24).TextColor(iconColor)
-			LabelLarge.Style(ui.Text(c, item.Label), selected).TextColor(labelColor).SingleLine()
+			LabelLarge.Style(ui.Text(c, item.Label), selected).TextColor(labelColor).Grow(1).MinWidth(0).SingleLine()
 		})
 		return b.Clicked()
 	}
@@ -128,7 +129,7 @@ func navItem(c *ui.Context, item NavItem, selected, expanded bool) bool {
 				ui.Icon(c, icon).FontSize(24).TextColor(iconColor)
 			})
 		})
-		LabelMedium.Style(ui.Text(c, item.Label), selected).TextColor(labelColor).SingleLine()
+		LabelMedium.Style(ui.Text(c, item.Label), selected).TextColor(labelColor).FillWidth().TextAlign(ui.Center).SingleLine()
 	})
 	return b.Clicked()
 }
