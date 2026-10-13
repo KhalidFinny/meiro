@@ -9,48 +9,58 @@ on:
     branches: ["master"]
   pull_request:
 
+# A newer push to the same ref supersedes the run in flight. A pull request
+# is cancelled, so a fix does not wait behind the run it replaced; a push to
+# master runs to the end, so every commit that lands is checked.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 env:
   GOLANGCI_LINT_VERSION: v2.14.0
+  # The release tag has the v; the asset name does not, so the version is
+  # kept without one and the tag adds it.
+  ACTIONLINT_VERSION: 1.7.9
 
 jobs:
-  format:
+  # Every static check on one runner: they are all quick, and splitting them
+  # only paid for the checkout and the toolchain again per job. The compile
+  # of each target is here too, so a break in a platform file fails the
+  # pull request rather than the release.
+  verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - name: Check formatting
-        run: |
-          test -z "$(gofmt -l .)" || { echo "Unformatted files:"; gofmt -l .; exit 1; }
-          test -z "$(go tool gofumpt -l .)" || { echo "Files needing gofumpt:"; go tool gofumpt -l .; exit 1; }
-
-  tidy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
+        # gofumpt is gofmt with more rules, so it is the one check to make: it
+        # rejects everything gofmt rejects, and more.
+        run: test -z "$(go tool gofumpt -l .)" || { echo "Files needing gofumpt:"; go tool gofumpt -l .; exit 1; }
       - name: Check go.mod and go.sum are tidy
+        # tidy -diff exits non-zero when the files are not tidy, so it asks the
+        # whole question; a `git diff` after it would ask the same one again.
+        run: go mod tidy -diff
+      - name: Vet and build every target
+        env:
+          CGO_ENABLED: "0"
         run: |
-          go mod tidy -diff
-          git diff --exit-code -- go.mod go.sum
-
-  vet:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - run: go vet ./...
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            goos="${target%%/*}"; goarch="${target##*/}"
+            echo "::group::vet and build $target"
+            GOOS="$goos" GOARCH="$goarch" go vet ./...
+            GOOS="$goos" GOARCH="$goarch" go build ./...
+            echo "::endgroup::"
+          done
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -62,32 +72,9 @@ jobs:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: ./...
 
-  cross-compile:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: linux-amd64, goos: linux, goarch: amd64 }
-          - { name: linux-arm64, goos: linux, goarch: arm64 }
-          - { name: darwin-amd64, goos: darwin, goarch: amd64 }
-          - { name: darwin-arm64, goos: darwin, goarch: arm64 }
-          - { name: windows-amd64, goos: windows, goarch: amd64 }
-    runs-on: ubuntu-latest
-    name: build (${{ matrix.name }})
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - name: Compile
-        env:
-          CGO_ENABLED: "0"
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: go build ./...
-
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -95,21 +82,30 @@ jobs:
           go-version-file: go.mod
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-      - run: go test -race -count=1 ./...
+      # The Linux media session talks to the session bus, so its tests need
+      # one to run at all. dbus-run-session is part of the image; if it is
+      # ever missing, the tests skip themselves and the warning says so,
+      # rather than the job failing for a reason that is not the change.
+      - name: Test
+        run: |
+          if command -v dbus-run-session >/dev/null 2>&1; then
+            dbus-run-session -- go test -race -count=1 ./...
+          else
+            echo "::warning::dbus-run-session is missing; D-Bus tests will skip themselves."
+            go test -race -count=1 ./...
+          fi
 
   scripts:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - name: Check shell scripts
-        run: |
-          shellcheck --severity=warning scripts/fetch-tools.sh scripts/package-linux.sh
-          bash -n scripts/fetch-tools.sh
-          bash -n scripts/package-linux.sh
+        run: shellcheck --severity=warning scripts/fetch-tools.sh scripts/package-linux.sh
       - name: Check workflows
         run: |
           curl --fail --location --silent --show-error \
-            https://github.com/rhysd/actionlint/releases/download/v1.7.9/actionlint_1.7.9_linux_amd64.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
             --output "$RUNNER_TEMP/actionlint.tar.gz"
           tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
           "$RUNNER_TEMP/actionlint" -color
@@ -121,17 +117,15 @@ jobs:
   # CI run on the tag's commit instead.
   checks:
     if: always()
-    needs: [format, tidy, vet, lint, cross-compile, test, scripts]
+    needs: [verify, lint, test, scripts]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: All checks must pass
         run: |
           # needs.<job>.result is one of success, failure, cancelled, skipped.
-          if [ "${{ needs.format.result }}" != "success" ] || \
-             [ "${{ needs.tidy.result }}" != "success" ] || \
-             [ "${{ needs.vet.result }}" != "success" ] || \
+          if [ "${{ needs.verify.result }}" != "success" ] || \
              [ "${{ needs.lint.result }}" != "success" ] || \
-             [ "${{ needs.cross-compile.result }}" != "success" ] || \
              [ "${{ needs.test.result }}" != "success" ] || \
              [ "${{ needs.scripts.result }}" != "success" ]; then
             echo "One or more checks failed."
