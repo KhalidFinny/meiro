@@ -14,6 +14,9 @@ and this project adheres to
   over the usual frequency bands, plus the presets an audio player offers.
   A change restarts the music where it is, and a boosted band reserves
   matching headroom so the shaped signal cannot clip.
+- **Playlist sorting**: order playlist songs by title, artist, or duration in
+  either direction. The selected order also controls Play, Shuffle, track
+  activation, and playlist search results.
 - **Last.fm scrobbling.** Connect your account in Settings; Meiro then sends
   what is playing and scrobbles each track once you have listened to half of
   it, or four minutes. Pause scrobbling without disconnecting, and plays that

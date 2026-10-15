@@ -26,6 +26,8 @@ type SearchSpec struct {
 
 // SearchResult is what happened to a search bar this frame.
 type SearchResult struct {
+	// Focused is true while the bar or one of its controls owns focus.
+	Focused bool
 	// Submitted is Enter pressed: the one moment a search should run.
 	Submitted bool
 	Changed   bool
@@ -87,6 +89,7 @@ func SearchBar(c *ui.Context, spec SearchSpec) SearchResult {
 			}
 		}
 	})
+	result.Focused = bar.FocusWithin()
 	result.Element = bar
 	return result
 }

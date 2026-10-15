@@ -55,8 +55,11 @@ func (s ButtonSize) dims() buttonDims {
 type ButtonSpec struct {
 	Label string
 	Icon  *ui.SVG
-	Kind  ButtonKind
-	Size  ButtonSize
+	// IconRotation rotates the icon around its center without changing the
+	// button's layout. It is useful for controls whose icon reflects state.
+	IconRotation float32
+	Kind         ButtonKind
+	Size         ButtonSize
 	// Square gives the button the squarer shape; the default is a pill.
 	Square bool
 	// Toggle makes the button a toggle: Selected is its state, and a selected
@@ -174,9 +177,10 @@ func Button(c *ui.Context, spec ButtonSpec) ui.Element {
 	if spec.Kind == Elevated && !spec.Disabled {
 		Elevation(c, b, 1)
 	}
+	iconRotation := Animate(b, "icon-rotation", spec.IconRotation, SpatialFast)
 	b.Children(func() {
 		if spec.Icon != nil {
-			ui.Icon(c, spec.Icon).FontSize(d.icon).TextColor(content)
+			ui.Icon(c, spec.Icon).FontSize(d.icon).TextColor(content).Rotate(iconRotation)
 		}
 		if spec.Label != "" {
 			buttonLabel(c, d.label, spec.Label, true, 0).TextColor(content).SingleLine()

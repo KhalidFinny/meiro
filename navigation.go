@@ -123,7 +123,7 @@ func (a *app) onNavigate() {
 	// A playlist page opens unfiltered, with its search closed: the search
 	// belongs to the visit, not the page. A page kept from before rebuilds
 	// its rows, since the search is part of the rows' key.
-	a.detailFilter, a.detailSearchOpen, a.detailFocus = "", false, false
+	a.detailFilter, a.detailSearchOpen, a.detailFocus, a.detailSearchHadFocus, a.detailSort, a.detailSortOpen = "", false, false, false, playlistSort{}, false
 	a.pageLoad.stop()
 	a.pageMore.stop()
 	a.nowPlaying.open, a.nowPlaying.closing = false, false
@@ -345,10 +345,14 @@ func (a *app) reloadPage() {
 // activate opens what an item is: a song plays from its place in tracks,
 // and the others open their page.
 func (a *app) activate(item youtube.MusicItem, tracks []youtube.MusicItem) {
+	a.activateAt(item, tracks, indexOf(tracks, item.VideoID))
+}
+
+func (a *app) activateAt(item youtube.MusicItem, tracks []youtube.MusicItem, index int) {
 	target := item.Target()
 	switch target.Kind {
 	case youtube.TargetTrack:
-		index := max(indexOf(tracks, item.VideoID), 0)
+		index = max(index, 0)
 		options, source := a.queueContext(index)
 		a.playFrom(item, tracks, index, options, source)
 	case youtube.TargetAlbum, youtube.TargetPlaylist, youtube.TargetArtist:

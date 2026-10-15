@@ -73,7 +73,14 @@ func (a *app) rowView(c *ui.Context, rows []row, i int) {
 		a.topResult(c, r.item)
 	case rowHeading:
 		next := i+1 < len(rows) && (rows[i+1].kind == rowCards || rows[i+1].kind == rowColumns)
-		a.sectionHeading(c, r, next, i == 0)
+		if r.shelf == "playlist-sort-header" {
+			ui.Row(c).Padding(8, 16).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, r.title).Grow(1)
+				a.playlistSort(c)
+			})
+		} else {
+			a.sectionHeading(c, r, next, i == 0)
+		}
 	case rowCards:
 		a.cardShelf(c, r)
 	case rowColumns:
@@ -81,7 +88,7 @@ func (a *app) rowView(c *ui.Context, rows []row, i int) {
 	case rowGrid:
 		a.cardGrid(c, r)
 	case rowTrack:
-		a.songRow(c, r.item, a.page.playable, songOptions{number: r.number(), list: r.shelf, position: r.position, inset: true})
+		a.songRow(c, r.item, a.page.playable, songOptions{number: r.number(), list: r.shelf, position: r.position, track: r.track, inset: true})
 	case rowMore:
 		ui.Row(c).Justify(ui.Center).Padding(16).Children(func() {
 			if m3.Button(c, m3.ButtonSpec{Label: r.title, Kind: m3.Tonal, Size: m3.Medium56, Key: "more"}).Clicked() {
@@ -443,6 +450,9 @@ type songOptions struct {
 	// two keys rather than one shared menu.
 	list     string
 	position int
+	// track is the exact occurrence in the queue. It differs from position
+	// when a playlist search hides entries before this row.
+	track int
 	// inset puts the row in from the edges of the page, as the rows of a
 	// page of songs are; rows in a shelf sit flush.
 	inset bool
@@ -578,9 +588,16 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 		}
 	}
 	if main.Clicked() {
-		if o.directQueue {
-			a.playFrom(item, queue, max(indexOf(queue, item.VideoID), 0), youtube.UpNextOptions{}, o.source)
-		} else {
+		switch {
+		case o.directQueue:
+			index := o.track
+			if index < 0 {
+				index = indexOf(queue, item.VideoID)
+			}
+			a.playFrom(item, queue, max(index, 0), youtube.UpNextOptions{}, o.source)
+		case o.track >= 0:
+			a.activateAt(item, queue, o.track)
+		default:
 			a.activate(item, queue)
 		}
 	}
@@ -779,8 +796,12 @@ func (a *app) hero(c *ui.Context) {
 			if d.subtitle != "" {
 				m3.Text(c, m3.BodyLarge, d.subtitle).MaxLines(2).TextColor(sc.OnSurfaceVariant)
 			}
+			if r.id == routePlaylist && a.detailSearchOpen {
+				ui.Box(c).Height(10)
+				ui.Row(c).Padding(0, 24).Children(func() { a.playlistSearch(c) })
+			}
 			ui.Box(c).Height(10)
-			ui.Row(c).Gap(12).Children(func() {
+			ui.Row(c).Gap(8).Wrap().Children(func() {
 				none := len(a.page.playable) == 0
 				if m3.Button(c, m3.ButtonSpec{Label: "Play", Icon: m3.IconPlay, Size: m3.Medium56, Disabled: none, Key: "hero-play"}).Clicked() {
 					a.playAll()
@@ -790,7 +811,7 @@ func (a *app) hero(c *ui.Context) {
 				}
 				a.libraryButton(c)
 				a.subscribeButton(c)
-				if r.id == routePlaylist {
+				if r.id == routePlaylist && !a.detailSearchOpen {
 					a.playlistSearch(c)
 				}
 			})
@@ -845,15 +866,16 @@ const (
 // nothing to say it was still on.
 func (a *app) playlistSearch(c *ui.Context) {
 	sc := m3.Of(c).Scheme
-	// One element carries both states, so opening grows the control instead
-	// of swapping one thing for another.
-	control := ui.Row(c.Key("playlist-search")).Shrink(0)
+	// Animate the parent width so the search expands from its icon button
+	// without relying on Grow inside the shrink-wrapped action group.
+	control := ui.Row(c.Key("playlist-search")).MinWidth(0).Grow(1).Shrink(1)
 	target := float32(0)
 	if a.detailSearchOpen {
 		target = 1
 	}
 	grown := m3.Animate(control, "open", target, m3.SpatialFast)
 	if !a.detailSearchOpen && grown < 0.02 {
+		control.Width(detailSearchButton)
 		control.Children(func() {
 			button := m3.IconButton(c, m3.IconButtonSpec{
 				Icon: m3.IconSearch, Label: "Search in this playlist",
@@ -866,22 +888,32 @@ func (a *app) playlistSearch(c *ui.Context) {
 				button.Hovered(), button.Pressed(), button.FocusVisible()))
 			if button.Clicked() {
 				a.detailSearchOpen, a.detailFocus = true, true
+				a.detailSearchHadFocus = false
 			}
 		})
 		return
 	}
-	control.Grow(1).MaxWidth(detailSearchButton + (detailSearchWidth-detailSearchButton)*min(max(grown, 0), 1))
+	maxWidth := float32(detailSearchWidth)
+	if a.listWidth > 0 {
+		maxWidth = min(maxWidth, a.listWidth-48)
+	}
+	control.Width(detailSearchButton + (maxWidth-detailSearchButton)*min(max(grown, 0), 1))
 	control.Children(func() {
 		result := m3.SearchBar(c, m3.SearchSpec{
 			Value:       &a.detailFilter,
 			Placeholder: "Search in this playlist",
 			Key:         "playlist-search-bar",
 			AutoFocus:   a.detailFocus,
-			MaxWidth:    detailSearchWidth,
+			MaxWidth:    maxWidth,
 			Dismiss:     true,
 		})
 		if result.Dismissed {
 			a.closePlaylistSearch()
+		} else {
+			if a.detailSearchHadFocus && !result.Focused && a.detailFilter == "" {
+				a.closePlaylistSearch()
+			}
+			a.detailSearchHadFocus = result.Focused
 		}
 	})
 	// The bar has taken the keyboard, or the frame it would have was not the
@@ -892,8 +924,54 @@ func (a *app) playlistSearch(c *ui.Context) {
 // closePlaylistSearch puts a playlist page back to its whole list, and the
 // control back to the button that opens the search.
 func (a *app) closePlaylistSearch() {
-	a.detailSearchOpen, a.detailFocus = false, false
+	a.detailSearchOpen, a.detailFocus, a.detailSearchHadFocus = false, false, false
 	a.detailFilter = ""
+}
+
+// playlistSort draws one compact field-and-direction control above the list.
+func (a *app) playlistSort(c *ui.Context) {
+	label := "Sort: " + a.detailSort.label()
+	if a.detailSort.active() {
+		label += " · " + a.detailSort.directionLabel()
+	}
+	rotation := float32(0)
+	if a.detailSortOpen {
+		rotation = 180
+	}
+	anchor := m3.Button(c, m3.ButtonSpec{Label: label, Icon: m3.IconExpandMore, IconRotation: rotation, Kind: m3.Outlined, Size: m3.Medium56, Key: "playlist-sort"})
+	if anchor.Clicked() {
+		a.detailSortOpen = true
+	}
+	if a.detailSortOpen {
+		m3.Menu(c, anchor, &a.detailSortOpen, 280, func() {
+			choices := []struct {
+				field playlistSortField
+				label string
+			}{
+				{playlistSortOriginal, "Original order"},
+				{playlistSortTitle, "Title, A–Z"},
+				{playlistSortArtist, "Artist, A–Z"},
+				{playlistSortDuration, "Duration, shortest first"},
+			}
+			for _, choice := range choices {
+				item := m3.MenuItem(c, choice.label, nil)
+				if item.Clicked() {
+					a.detailSort.choose(choice.field)
+					a.detailSortOpen = false
+				}
+			}
+			if a.detailSort.active() {
+				label := "Sort descending"
+				if a.detailSort.desc {
+					label = "Sort ascending"
+				}
+				if m3.MenuItem(c, label, nil).Clicked() {
+					a.detailSort.desc = !a.detailSort.desc
+					a.detailSortOpen = false
+				}
+			}
+		})
+	}
 }
 
 func heroLabel(kind youtube.TargetKind) string {

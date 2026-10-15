@@ -100,6 +100,7 @@ type rowsKey struct {
 	top       youtube.MusicItem
 	// filter is the playlist search the rows show the matches of.
 	filter string
+	sort   playlistSort
 }
 
 // syncRows rebuilds the rows when the page's data changed since the last
@@ -118,9 +119,9 @@ func (a *app) syncRows() {
 		key.submitted, key.top = a.search.submitted, a.search.top
 	}
 	if r.id == routePlaylist {
-		// A playlist search is not the page's own data, so the key carries
-		// it: a change asks for the rows again.
-		key.filter = a.detailFilter
+		// Playlist-local controls are not page data, so the key carries them:
+		// changing either one asks for rows again.
+		key.filter, key.sort = a.detailFilter, a.detailSort
 	}
 	if a.page.rows == nil || a.page.rowsDirty || key != a.page.rowsKey {
 		a.page.rowsKey, a.page.rowsDirty = key, false
@@ -171,6 +172,20 @@ func buildRows(rows []row, playable []youtube.MusicItem, r *route, s *pageState,
 	sections := s.sections
 	if len(sections) == 0 && len(s.items) > 0 {
 		sections = []youtube.MusicSection{{Items: s.items}}
+	}
+	if r.id == routePlaylist && key.sort.active() {
+		sections = sortPlaylistSections(sections, key.sort)
+	}
+	if r.id == routePlaylist {
+		hasTracks := false
+		for _, section := range sections {
+			for _, item := range section.Items {
+				hasTracks = hasTracks || item.IsTrack()
+			}
+		}
+		if hasTracks {
+			rows = append(rows, row{kind: rowHeading, title: "Songs", shelf: "playlist-sort-header", track: -1})
+		}
 	}
 	vertical := collection || r.id == routeSearch
 	// A playlist narrowed to a search shows only the songs that match, and
@@ -283,7 +298,8 @@ func buildRows(rows []row, playable []youtube.MusicItem, r *route, s *pageState,
 	case s.more != "" && r.id != routeSearch:
 		rows = append(rows, row{kind: rowMore, title: "Show more", track: -1})
 	}
-	if len(rows) == 0 || (len(rows) == 1 && rows[0].kind == rowHero) {
+	if len(rows) == 0 || (len(rows) == 1 && rows[0].kind == rowHero) ||
+		(searching && len(rows) == 2 && rows[0].kind == rowHero && rows[1].shelf == "playlist-sort-header") {
 		title, body := r.empty.title, r.empty.body
 		switch {
 		case r.id == routeSearch:

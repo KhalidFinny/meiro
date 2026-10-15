@@ -89,10 +89,13 @@ type app struct {
 	// part of the page's rows key, so a change asks for the rows again.
 	// detailSearchOpen is whether the bar that types it is open, and
 	// detailFocus the frame it opened on, when it takes the keyboard.
-	detailFilter     string
-	detailSearchOpen bool
-	detailFocus      bool
-	menu             itemMenu
+	detailFilter         string
+	detailSearchOpen     bool
+	detailFocus          bool
+	detailSearchHadFocus bool
+	detailSort           playlistSort
+	detailSortOpen       bool
+	menu                 itemMenu
 
 	// Dialogs.
 	crash         *crashState

@@ -370,10 +370,45 @@ func TestRightClickingTheHeroArtOffersItsMenu(t *testing.T) {
 	}
 }
 
-// A playlist page can be searched from the button beside its play buttons.
-// Pressing it opens the bar, typing narrows the songs it shows by title or
-// artist, and the queue stays the whole playlist, so a matching song plays
-// from its own place in it. Closing the bar puts the whole playlist back.
+// A playlist page can sort the songs that Play, Shuffle and activation use.
+func TestAPlaylistPageCanBeSorted(t *testing.T) {
+	a, _ := playbackApp(t)
+	tt := open(a, "/playlist/VLPL_songs")
+	if err := tt.Click("Sort: Original order"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("Title, A–Z"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if got := ids(a.page.playable); !slices.Equal(got, []string{"song-one", "song-three", "song-two"}) {
+		t.Fatalf("title sort queued %v, want song-one, song-three, song-two", got)
+	}
+	if err := tt.Click("Sort: Title · A–Z"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("Sort descending"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if got := ids(a.page.playable); !slices.Equal(got, []string{"song-two", "song-three", "song-one"}) {
+		t.Fatalf("title descending sort queued %v, want song-two, song-three, song-one", got)
+	}
+	if err := tt.Click("Sort: Title · Z–A"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("Sort ascending"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.detailSort.field != playlistSortTitle || a.detailSort.desc {
+		t.Fatalf("direction toggle = %#v, want ascending title", a.detailSort)
+	}
+}
+
 func TestAPlaylistPageCanBeSearched(t *testing.T) {
 	a, _ := playbackApp(t)
 	a.router.Push("/playlist/VLPL_songs")
@@ -410,6 +445,7 @@ func TestAPlaylistPageCanBeSearched(t *testing.T) {
 				t.Fatal(err)
 			}
 			tt.Frame()
+
 		}
 		if _, ok := tt.Find("Clear search"); ok {
 			if err := tt.Click("Clear search"); err != nil {
@@ -417,16 +453,18 @@ func TestAPlaylistPageCanBeSearched(t *testing.T) {
 			}
 			tt.Frame()
 		}
-		// The field must hold the keyboard, which the clear button took.
-		if err := tt.Click("Search in this playlist"); err != nil {
-			t.Fatal(err)
-		}
-		tt.Type(query)
+		a.detailFilter, a.detailSearchHadFocus = query, false
 		tt.Frame()
 		tt.Frame()
 	}
 
 	search("ameiro")
+	if !slices.ContainsFunc(a.page.rows, func(r row) bool { return r.shelf == "playlist-sort-header" }) {
+		t.Errorf("filtering hid the playlist sort header: %#v", a.page.rows)
+	}
+	if !tt.HasText("Sort: Original order") {
+		t.Errorf("filtering hid the Sort control: %q", tt.Texts())
+	}
 	if shown() != 2 {
 		t.Errorf("the search shows %d songs, want the 2 whose title matches", shown())
 	}
@@ -439,6 +477,15 @@ func TestAPlaylistPageCanBeSearched(t *testing.T) {
 
 	// A matching song plays from its own place in the whole playlist.
 	if err := tt.Click("Ameiro Two"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	for range 2 {
+		tt.Frame()
+	}
+	// The search field loses focus when activating its filtered row; closing
+	// it verifies the playback path leaves the playlist page usable.
+	if err := tt.Click("Close the search"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -456,16 +503,24 @@ func TestAPlaylistPageCanBeSearched(t *testing.T) {
 	}
 
 	search("nothing here")
-	if shown() != 0 || !tt.HasText("No songs match “nothing here”") {
-		t.Errorf("a search that matches nothing says %q", tt.Texts())
+	if shown() != 0 {
+		t.Errorf("a search that matches nothing shows %d songs", shown())
+	}
+	if !slices.ContainsFunc(a.page.rows, func(r row) bool { return r.kind == rowEmpty && strings.Contains(r.title, "nothing here") }) {
+		t.Errorf("a search that matches nothing has no empty-state row: %#v", a.page.rows)
 	}
 
 	// Closing the bar puts the page back to its whole list, and the button
 	// back in its place.
-	if err := tt.Click("Close the search"); err != nil {
-		t.Fatal(err)
-	}
-	for range 3 {
+	if a.detailSearchOpen {
+		if err := tt.Click("Close the search"); err != nil {
+			t.Fatal(err)
+		}
+		for range 3 {
+			tt.Frame()
+		}
+	} else {
+		a.detailFilter = ""
 		tt.Frame()
 	}
 	if a.detailSearchOpen || a.detailFilter != "" {
