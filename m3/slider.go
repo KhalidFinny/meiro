@@ -117,21 +117,23 @@ func Slider(c *ui.Context, value *float64, lo, hi float64, spec SliderSpec) ui.E
 			y0, y1 := r.Y+pad, r.Y+r.H-pad
 			hy := y1 - (y1-y0)*frac
 			p.Fill(ui.Rect{X: cx - thick/2, Y: y0, W: thick, H: y1 - y0}, inactive, radius)
-			// The active track reaches from the 0 dB mark to the handle:
-			// above it for a boost, below for a cut. Without a mark in
-			// range, it fills from the bottom.
-			zero := y1
+			// The active track fills from the middle of the range to the
+			// thumb: above the middle for a boost, below for a cut.
+			mid := y1
 			if lo < 0 && hi > 0 {
-				zero = y1 - (y1-y0)*float32(-lo/(hi-lo))
-				p.Fill(ui.Rect{X: cx - handleH/2, Y: zero - 1, W: handleH, H: 2}, handle, 1)
+				mid = y1 - (y1-y0)*float32(-lo/(hi-lo))
 			}
-			if span := max(zero, hy) - min(zero, hy); span > 1 {
-				p.Fill(ui.Rect{X: cx - thick/2, Y: min(zero, hy), W: thick, H: span}, active, radius)
+			if span := max(mid, hy) - min(mid, hy); span > 1 {
+				p.Fill(ui.Rect{X: cx - thick/2, Y: min(mid, hy), W: thick, H: span}, active, radius)
 			}
-			// The handle, a pill across the track.
-			p.Fill(ui.Rect{X: cx - handleH/2, Y: hy - handleW/2, W: handleH, H: handleW}, handle, handleW/2)
+			// The thumb, a circle on the track, a shade wider while held.
+			d := max(thick+10, 18)
+			if pressed {
+				d += 2
+			}
+			p.Fill(ui.Rect{X: cx - d/2, Y: hy - d/2, W: d, H: d}, handle, d/2)
 			if focused {
-				p.Stroke(ui.Rect{X: cx - handleH/2 - 3, Y: hy - handleW/2 - 3, W: handleH + 6, H: handleW + 6}, sc.Secondary, 6, 2)
+				p.Stroke(ui.Rect{X: cx - d/2 - 3, Y: hy - d/2 - 3, W: d + 6, H: d + 6}, sc.Secondary, 6, 2)
 			}
 			return
 		}
