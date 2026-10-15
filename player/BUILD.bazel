@@ -17,6 +17,7 @@ go_library(
 go_test(
     name = "player_test",
     srcs = [
+        "eq_test.go",
         "integration_test.go",
         "player_test.go",
     ],

@@ -12,7 +12,7 @@ import (
 )
 
 func TestStreamArgsProtocolWhitelist(t *testing.T) {
-	args := streamArgs("https://media.test/audio", 0)
+	args := streamArgs("https://media.test/audio", 0, nil)
 	index := slices.Index(args, "-protocol_whitelist")
 	if index < 0 || index+1 == len(args) {
 		t.Fatalf("no protocol whitelist in %v", args)
@@ -23,13 +23,13 @@ func TestStreamArgsProtocolWhitelist(t *testing.T) {
 }
 
 func TestStreamArgsLocalFilesHaveNoWhitelist(t *testing.T) {
-	if args := streamArgs("/tmp/audio.wav", 0); slices.Contains(args, "-protocol_whitelist") {
+	if args := streamArgs("/tmp/audio.wav", 0, nil); slices.Contains(args, "-protocol_whitelist") {
 		t.Fatalf("local file got a whitelist that would block it: %v", args)
 	}
 }
 
 func TestStreamArgsDoesNotAddHTTPOptionsToLocalFiles(t *testing.T) {
-	args := streamArgs("/tmp/audio.wav", 0)
+	args := streamArgs("/tmp/audio.wav", 0, nil)
 	if slices.Contains(args, "-reconnect") || slices.Contains(args, "-user_agent") {
 		t.Fatalf("local file got HTTP-only options: %v", args)
 	}

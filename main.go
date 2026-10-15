@@ -172,6 +172,7 @@ func (a *app) setup() {
 	a.cacheSongsText = strconv.Itoa(a.settings.CacheSongs)
 	a.volume = a.settings.Volume
 	a.player.SetVolume(a.volume / 100)
+	a.loadEQ()
 	a.openAudioCache()
 	a.openArtworkCache()
 }
@@ -198,6 +199,27 @@ func (a *app) openArtworkCache() {
 		}
 		a.thumbs.UseStore(store)
 	})
+}
+
+// loadEQ shapes the player with the bands the settings hold, growing or
+// trimming them to the band count the player takes, and remembers what it
+// sent so a slider release later applies only what changed.
+func (a *app) loadEQ() {
+	a.normalizeEQBands()
+	a.player.SetEQ(a.eqBands())
+}
+
+// normalizeEQBands makes the settings' band table exactly the count the
+// player takes, filling new bands with silence, and syncs what the player
+// has been sent with it.
+func (a *app) normalizeEQBands() {
+	if len(a.settings.EQBands) == player.EQBandCount {
+		return
+	}
+	bands := make([]float64, player.EQBandCount)
+	copy(bands, a.settings.EQBands)
+	a.settings.EQBands = bands
+	copy(a.eqApplied[:], bands)
 }
 
 // openAudioCache opens the audio cache where the settings say, or at the

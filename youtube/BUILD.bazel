@@ -7,6 +7,7 @@ go_library(
         "cookie.go",
         "item.go",
         "library.go",
+        "loudness.go",
         "music.go",
         "orderedjson.go",
         "playback.go",

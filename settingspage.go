@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/elianiva/meiro/internal/audio"
 	"github.com/elianiva/meiro/internal/settings"
 	"github.com/elianiva/meiro/m3"
+	"github.com/elianiva/meiro/player"
 )
 
 // swatches are the seed colours the settings offer.
@@ -35,6 +37,7 @@ var settingsCards = []struct {
 	card func(a *app, c *ui.Context)
 }{
 	{"appearance", (*app).appearanceCard},
+	{"sound", (*app).soundCard},
 	{"cache", (*app).playbackCacheCard},
 	{"desktop", (*app).desktopCard},
 	{"history", (*app).historyCard},
@@ -196,6 +199,66 @@ func (a *app) playbackCacheCard(c *ui.Context) {
 			})
 			if a.cacheDirError != "" {
 				m3.Text(c, m3.BodyMedium, a.cacheDirError).TextColor(sc.Error)
+			}
+		})
+	})
+}
+
+// swatch is one seed colour, drawn as the primary colour it would give. The
+// soundCard holds the loudness normalization switch and the equaliser's
+// bands. A slider commits on release: dragging writes the settings, and
+// letting go sends the whole band table to the player, which restarts the
+// decode once instead of for every tick.
+func (a *app) soundCard(c *ui.Context) {
+	sc := m3.Of(c).Scheme
+	a.settingsCard(c, "Sound", m3.IconVolumeUp, func() {
+		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+			settingLabel(c, "Normalise volume", "Play every track at the loudness YouTube measures for it, so a playlist holds a steady level. Needs a signed-in session.").Grow(1)
+			on := a.settings.Normalize
+			if m3.Switch(c, &on, "Normalise volume").Changed() {
+				a.settings.Normalize = on
+				a.applyNormalization()
+				a.saveSettings()
+			}
+		})
+		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+			settingLabel(c, "Equaliser", "Shape ten bands of the sound. A change restarts the music where it is.").Grow(1)
+			on := a.settings.EQOn
+			if m3.Switch(c, &on, "Equaliser").Changed() {
+				a.settings.EQOn = on
+				a.applyEQ()
+			}
+		})
+		a.normalizeEQBands()
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			for _, preset := range eqPresets {
+				selected := slices.Equal(a.settings.EQBands, preset.bands)
+				if m3.Button(c, m3.ButtonSpec{
+					Label: preset.name, Kind: m3.Tonal, Size: m3.ExtraSmall32,
+					Toggle: true, Selected: selected, Key: "eq-preset-" + preset.name,
+				}).Clicked() {
+					copy(a.settings.EQBands, preset.bands)
+					copy(a.eqApplied[:], preset.bands)
+					a.applyEQ()
+				}
+			}
+		})
+		// The bands, one upright slider each above its frequency, the way an
+		// equaliser is drawn: the handle rests on the 0 dB mark, and a boost
+		// or cut fills between the two.
+		ui.Row(c).Gap(4).Children(func() {
+			for i := range player.EQBandCount {
+				ui.Column(c).Gap(6).Width(46).AlignItems(ui.Center).Children(func() {
+					slider := m3.Slider(c, &a.settings.EQBands[i], -eqBoostRange, eqBoostRange, m3.SliderSpec{
+						Label: eqLabels[i] + " dB", Key: "eq-" + strconv.Itoa(i),
+						Thickness: 6, Vertical: true, Disabled: !a.settings.EQOn,
+					}).Height(148).FillWidth()
+					if !slider.Pressed() && a.eqApplied[i] != a.settings.EQBands[i] {
+						a.eqApplied[i] = a.settings.EQBands[i]
+						a.applyEQ()
+					}
+					m3.Text(c, m3.LabelLarge, eqLabels[i]).TextColor(sc.OnSurfaceVariant)
+				})
 			}
 		})
 	})
