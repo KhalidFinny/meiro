@@ -717,6 +717,11 @@ func TestOpeningTheLogsFolderFromSettings(t *testing.T) {
 	}
 	a.router.Push("/settings")
 	tt := ui.NewTester(a.view, 1000, 4000)
+	// The sound card made the page taller than this window, and a list
+	// builds only the cards in view: scroll the logs card in before
+	// clicking it.
+	tt.Scroll(500, 2000, 0, 2500)
+	tt.Frame()
 	if err := tt.Click("Open logs folder"); err != nil {
 		t.Fatal(err)
 	}
