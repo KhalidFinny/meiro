@@ -10,6 +10,10 @@ and this project adheres to
 
 ### Added
 
+- **Ten-band equaliser.** Shape the sound in Settings → Sound: ten sliders
+  over the usual frequency bands, plus the presets an audio player offers.
+  A change restarts the music where it is, and a boosted band reserves
+  matching headroom so the shaped signal cannot clip.
 - **Last.fm scrobbling.** Connect your account in Settings; Meiro then sends
   what is playing and scrobbles each track once you have listened to half of
   it, or four minutes. Pause scrobbling without disconnecting, and plays that

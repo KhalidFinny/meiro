@@ -140,14 +140,12 @@ type app struct {
 	toolsLoaded bool
 	toolsLookup task
 
-	// loudness remembers the loudness each track's player response reported,
-	// so a replay and a normalize switch flipped mid-track need no request.
-	// The LRU is not safe for concurrent use, so only the main thread touches
-	// it; requests carry away the values they need.
-	loudness *lru.Cache[string, float64]
 	// eqApplied is the band table the player last received, so a slider
 	// release applies only what changed.
 	eqApplied [player.EQBandCount]float64
+	// eqDebounce waits out a quiet moment after the sliders moved before the
+	// changed bands restart the decode.
+	eqDebounce task
 
 	// stop ends the periodic work; stopOnce closes it once.
 	stop     chan struct{}
@@ -166,7 +164,6 @@ func newApp() *app {
 		pages:      lru.New[string, *pageData](pageCacheLimit),
 		details:    lru.New[string, detail](pageCacheLimit),
 		carousels:  lru.New[string, *m3.CarouselState](pageCacheLimit * 4),
-		loudness:   lru.New[string, float64](256),
 		stop:       make(chan struct{}),
 		statsRange: 14,
 		keyboard:   keyboardState{hintDelay: hintDelay},

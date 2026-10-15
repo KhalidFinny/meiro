@@ -122,6 +122,9 @@ func Slider(c *ui.Context, value *float64, lo, hi float64, spec SliderSpec) ui.E
 			mid := y1
 			if lo < 0 && hi > 0 {
 				mid = y1 - (y1-y0)*float32(-lo/(hi-lo))
+				// The 0 dB mark, a short line beside the track at the
+				// level the thumb rests on.
+				p.Fill(ui.Rect{X: cx - thick/2 - 9, Y: mid - 1, W: 6, H: 2}, handle, 1)
 			}
 			if span := max(mid, hy) - min(mid, hy); span > 1 {
 				p.Fill(ui.Rect{X: cx - thick/2, Y: min(mid, hy), W: thick, H: span}, active, radius)

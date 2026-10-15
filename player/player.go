@@ -64,9 +64,6 @@ type Player struct {
 	mu      sync.Mutex
 	session *session
 	volume  float64
-	// gain is the track's normalization gain, at most 1, applied on top of
-	// the user's volume.
-	gain float64
 
 	// eqBands holds one gain in dB per EQFrequencies entry, nil when the
 	// equaliser is off. Guarded by ctl, which also serialises the restart
@@ -290,27 +287,16 @@ func (p *Player) SetVolume(volume float64) {
 	defer p.mu.Unlock()
 	p.volume = max(volume, 0)
 	if p.session != nil {
-		p.session.out.SetVolume(p.volume * p.gain)
-	}
-}
-
-// SetGain sets the fixed normalization gain for the track playing, at most 1:
-// normalization attenuates and never boosts. It multiplies the user's volume.
-func (p *Player) SetGain(gain float64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.gain = min(max(gain, 0), 1)
-	if p.session != nil {
-		p.session.out.SetVolume(p.volume * p.gain)
+		p.session.out.SetVolume(p.volume)
 	}
 }
 
 // SetEQ sets the equaliser's band gains, in dB, one per EQFrequencies entry.
-// A slice of another length is ignored. A change while a stream plays
-// restarts the decode at the current position, the way a seek does, so the
-// new filter chain takes effect at once.
+// nil turns the equaliser off. A non-nil slice of another length is ignored.
+// A change while a stream plays restarts the decode at the current position,
+// the way a seek does, so the new filter chain takes effect at once.
 func (p *Player) SetEQ(gains []float64) {
-	if len(gains) != EQBandCount {
+	if gains != nil && len(gains) != EQBandCount {
 		return
 	}
 	for _, g := range gains {
@@ -530,7 +516,7 @@ func (p *Player) start(url string, at time.Duration, paused bool) error {
 	s.paused = paused
 	s.out = audioCtx.newPlayer(s.source)
 	p.mu.Lock()
-	s.out.SetVolume(p.volume * p.gain)
+	s.out.SetVolume(p.volume)
 	p.session = s
 	p.mu.Unlock()
 	if !paused {
@@ -601,13 +587,24 @@ func eqFilter(eq []float64) string {
 	if len(eq) != EQBandCount {
 		return ""
 	}
-	var bands []string
+	// A boosted band makes the shaped signal louder than the stream, and the
+	// output is s16, so the loudest boost needs matching headroom first: the
+	// volume filter attenuates the whole signal by that boost, and the
+	// boosted bands raise their own frequencies back to the stream's level.
+	var chain []string
+	boost := 0.0
+	for _, gain := range eq {
+		boost = max(boost, gain)
+	}
+	if boost > 0 {
+		chain = append(chain, fmt.Sprintf("volume=%.1fdB", -boost))
+	}
 	for i, gain := range eq {
 		if gain != 0 {
-			bands = append(bands, fmt.Sprintf("equalizer=f=%g:t=q:w=1.4:g=%.1f", EQFrequencies[i], gain))
+			chain = append(chain, fmt.Sprintf("equalizer=f=%g:t=q:w=1.4:g=%.1f", EQFrequencies[i], gain))
 		}
 	}
-	return strings.Join(bands, ",")
+	return strings.Join(chain, ",")
 }
 
 // isHTTP reports whether rawURL is read over HTTP, the only protocol that

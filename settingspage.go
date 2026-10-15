@@ -204,27 +204,17 @@ func (a *app) playbackCacheCard(c *ui.Context) {
 	})
 }
 
-// swatch is one seed colour, drawn as the primary colour it would give. The
-// soundCard holds the loudness normalization switch and the equaliser's
-// bands. A slider commits on release: dragging writes the settings, and
-// letting go sends the whole band table to the player, which restarts the
-// decode once instead of for every tick.
+// soundCard holds the equaliser's bands. A slider commits on release:
+// dragging writes the settings, and letting go sends the whole band table to
+// the player through the debounce, which restarts the decode once instead of
+// for every tick.
 func (a *app) soundCard(c *ui.Context) {
 	sc := m3.Of(c).Scheme
 	a.settingsCard(c, "Sound", m3.IconVolumeUp, func() {
 		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
-			settingLabel(c, "Normalise volume", "Play every track at the loudness YouTube measures for it, so a playlist holds a steady level. Needs a signed-in session.").Grow(1)
-			on := a.settings.Normalize
-			if m3.Switch(c, &on, "Normalise volume").Changed() {
-				a.settings.Normalize = on
-				a.applyNormalization()
-				a.saveSettings()
-			}
-		})
-		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
 			settingLabel(c, "Equaliser", "Shape ten bands of the sound. A change restarts the music where it is.").Grow(1)
 			on := a.settings.EQOn
-			if m3.Switch(c, &on, "Equaliser").Changed() {
+			if m3.Switch(c, &on, "Equaliser on").Changed() {
 				a.settings.EQOn = on
 				a.applyEQ()
 			}
@@ -235,7 +225,7 @@ func (a *app) soundCard(c *ui.Context) {
 				selected := slices.Equal(a.settings.EQBands, preset.bands)
 				if m3.Button(c, m3.ButtonSpec{
 					Label: preset.name, Kind: m3.Tonal, Size: m3.ExtraSmall32,
-					Toggle: true, Selected: selected, Key: "eq-preset-" + preset.name,
+					Toggle: true, Selected: selected, Disabled: !a.settings.EQOn, Key: "eq-preset-" + preset.name,
 				}).Clicked() {
 					copy(a.settings.EQBands, preset.bands)
 					copy(a.eqApplied[:], preset.bands)
@@ -255,7 +245,7 @@ func (a *app) soundCard(c *ui.Context) {
 					}).Height(148).FillWidth()
 					if !slider.Pressed() && a.eqApplied[i] != a.settings.EQBands[i] {
 						a.eqApplied[i] = a.settings.EQBands[i]
-						a.applyEQ()
+						a.scheduleEQ()
 					}
 					m3.Text(c, m3.LabelLarge, eqLabels[i]).TextColor(sc.OnSurfaceVariant)
 				})

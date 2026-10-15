@@ -17,11 +17,18 @@ func TestEqFilterShapesOnlyTheRaisedBands(t *testing.T) {
 	bands := make([]float64, EQBandCount)
 	bands[0], bands[4], bands[9] = -3, 6, 1.5
 	got := eqFilter(bands)
-	want := "equalizer=f=31:t=q:w=1.4:g=-3.0," +
+	want := "volume=-6.0dB," +
+		"equalizer=f=31:t=q:w=1.4:g=-3.0," +
 		"equalizer=f=500:t=q:w=1.4:g=6.0," +
 		"equalizer=f=16000:t=q:w=1.4:g=1.5"
 	if got != want {
 		t.Errorf("eqFilter = %q, want %q", got, want)
+	}
+	// Cuts only attenuate, so they need no headroom.
+	cuts := make([]float64, EQBandCount)
+	cuts[0], cuts[4] = -3, -6
+	if got := eqFilter(cuts); strings.Contains(got, "volume=") {
+		t.Errorf("eqFilter(cuts) = %q, want no headroom filter", got)
 	}
 }
 
@@ -56,6 +63,10 @@ func TestSetEQIgnoresAWrongLengthTable(t *testing.T) {
 	p.SetEQ(make([]float64, EQBandCount))
 	if len(p.eqBands) != EQBandCount {
 		t.Errorf("SetEQ stored %d bands, want %d", len(p.eqBands), EQBandCount)
+	}
+	p.SetEQ(nil)
+	if p.eqBands != nil {
+		t.Errorf("SetEQ(nil) left %v in the bands, want the equaliser off", p.eqBands)
 	}
 }
 

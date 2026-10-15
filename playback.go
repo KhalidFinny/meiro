@@ -249,9 +249,6 @@ func (a *app) enterTrack(item youtube.MusicItem, automatic bool) (time.Duration,
 	}
 	a.resumeID = ""
 	a.scrub, a.playErr, a.rawPlayErr = startAt.Seconds(), "", ""
-	// The previous track's normalization gain does not belong to this one;
-	// applyNormalization puts the new value back once it is known.
-	a.player.SetGain(1)
 	// A position in the track that is ending is not one for the next one, and
 	// the decode the seek was moving is about to be replaced.
 	a.seeking.stop()
@@ -330,7 +327,6 @@ func (a *app) streamAudio(item youtube.MusicItem, startAt time.Duration, changed
 			// it is instead of resolving the same track again.
 			cache.Add(item.VideoID, found.url)
 		}
-		a.applyNormalization()
 		a.warmNext()
 		a.syncSystemMedia()
 	})
@@ -417,9 +413,6 @@ func (a *app) followed(tag string) {
 	if found.total > 0 {
 		a.total = found.total
 	}
-	// The handover carried the previous track's gain on the shared output;
-	// this track's own applies now.
-	a.applyNormalization()
 	log.Printf("playback: audio followed on video_id=%s from_cache=%t duration=%s", item.VideoID, found.fromCache, found.total)
 	a.skipped = 0
 	if !found.fromCache {
