@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Playing a song from the Related tab queues only songs.** Up next used to fill with the playlists, albums and artists listed beside it, which could not play.
 - **Playlists, albums, artists and podcasts in the Related tab open when clicked.** Clicking one did nothing; it now opens its page, as it does anywhere else.
 - **The Related tab works for podcast episodes.** It said related songs weren't available; it now lists related episodes and suggested podcasts.
 

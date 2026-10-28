@@ -238,6 +238,28 @@ func TestLyricsSwitchBetweenSyncedAndStatic(t *testing.T) {
 	}
 }
 
+func TestPlayingFromRelatedQueuesOnlySongs(t *testing.T) {
+	a := newTestApp(t)
+	song := youtube.MusicItem{VideoID: "song-mixed", Title: "Playing Song", Kind: youtube.KindTrack}
+	a.queue.restore(playstate.State{Items: []youtube.MusicItem{song}, Index: 0, RecStart: -1})
+	a.current = a.queue.current()
+	tt := ui.NewTester(a.miniPlayer, miniWidth, miniHeight)
+	a.setMiniShown(true)
+	tt.Frame()
+	if err := tt.Click("Related"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	// The songs play with each other as the queue; the playlist and the
+	// artist between them are not queued.
+	if err := tt.Click("First Related Song"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(a.queue.items[:a.queue.limit(false)]); !slices.Equal(got, []string{"mixed-1", "mixed-2"}) || a.queue.source != "Related" {
+		t.Fatalf("playing from Related queued %v from %q", got, a.queue.source)
+	}
+}
+
 func TestFailedLyricsLookupIsTriedAgain(t *testing.T) {
 	a := newTestApp(t)
 	calls := 0
