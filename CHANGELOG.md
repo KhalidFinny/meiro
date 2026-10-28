@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Songs and podcast episodes can play faster or slower.** A speed button beside the volume, in the player bar, the full player and the tray's mini player, picks from 0.5× to 3× without changing the pitch. The track goes on from where it was. Music and podcasts each remember their own speed, so speeding up an episode leaves your songs at the pace you chose for them.
+
 ### Changed
 
 - **Podcast episodes show their details instead of lyrics.** The player's Lyrics tab becomes Details for an episode, as on YouTube Music: views, date and length, the title, the show and the full description. Chapter timestamps jump to that point in the episode, links open in the browser, and the show's name opens its page.
