@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Playlists, albums, artists and podcasts in the Related tab open when clicked.** Clicking one did nothing; it now opens its page, as it does anywhere else.
+- **The Related tab works for podcast episodes.** It said related songs weren't available; it now lists related episodes and suggested podcasts.
 
 ### Added
 
