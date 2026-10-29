@@ -12,6 +12,7 @@ import (
 	"github.com/elianiva/meiro/internal/audio"
 	"github.com/elianiva/meiro/internal/lru"
 	"github.com/elianiva/meiro/internal/playstate"
+	"github.com/elianiva/meiro/internal/settings"
 	"github.com/elianiva/meiro/youtube"
 )
 
@@ -628,6 +629,15 @@ func (a *app) speedFor(item youtube.MusicItem) float64 {
 		return speed
 	}
 	return 1
+}
+
+// applyCrossfade sends the crossfade length to the player, zero when it is off.
+func (a *app) applyCrossfade() {
+	var fade time.Duration
+	if a.settings.Crossfade {
+		fade = time.Duration(settings.ClampCrossfade(a.settings.CrossfadeSeconds)) * time.Second
+	}
+	a.player.SetCrossfade(fade)
 }
 
 // setSpeed chooses how fast tracks like the current one play, podcast

@@ -91,6 +91,10 @@ type Settings struct {
 	// EQBands holds each band's gain in dB, low to high, one per the player's
 	// equaliser frequencies.
 	EQBands []float64 `json:"eqBands,omitempty"`
+	// Crossfade fades the end of a track into the start of the next, for
+	// CrossfadeSeconds.
+	Crossfade        bool `json:"crossfade,omitempty"`
+	CrossfadeSeconds int  `json:"crossfadeSeconds,omitempty"`
 	// PodcastSpeed is how fast podcast episodes play, and MusicSpeed how fast
 	// everything else does, 1 or 0 for their own pace.
 	PodcastSpeed float64 `json:"podcastSpeed,omitempty"`
@@ -111,8 +115,25 @@ const (
 func Defaults() Settings {
 	return Settings{
 		Seed: "#6750a4", Mode: "system", Volume: 70, AutoPlay: true, CacheSongs: audio.DefaultLimit, NotifyTrack: true, ShowTray: true, TrayMark: TrayMarkWordmark,
-		Zoom: DefaultZoom,
+		Zoom: DefaultZoom, CrossfadeSeconds: DefaultCrossfade,
 	}
+}
+
+// The crossfade lengths the settings offer, in seconds.
+const (
+	MinCrossfade     = 1
+	MaxCrossfade     = 12
+	DefaultCrossfade = 5
+)
+
+// ClampCrossfade keeps a crossfade length between the ones the settings
+// offer, and reads the zero value of a settings file that has none as the
+// default.
+func ClampCrossfade(seconds int) int {
+	if seconds == 0 {
+		return DefaultCrossfade
+	}
+	return min(max(seconds, MinCrossfade), MaxCrossfade)
 }
 
 // The interface zooms the app offers, as percentages, and the step between
@@ -248,6 +269,7 @@ func Load(path string) Settings {
 		read.TrayMark = s.TrayMark
 	}
 	read.Zoom = ClampZoom(read.Zoom)
+	read.CrossfadeSeconds = ClampCrossfade(read.CrossfadeSeconds)
 	return read
 }
 

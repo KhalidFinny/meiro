@@ -77,6 +77,9 @@ type Player struct {
 	// speed is how fast streams play, 1 for their own pace. Written under
 	// ctl and mu, so either guards a read.
 	speed float64
+	// crossfade is how long the end of a track fades into the start of the
+	// next, zero for none. Written under ctl.
+	crossfade time.Duration
 
 	// next is the stream decoding ahead of the end of the current one, and
 	// advanced is the tag of the one that took over without a pause, until
@@ -195,6 +198,7 @@ func (p *Player) PreloadContext(ctx context.Context, tag, url string) error {
 	// one to follow with.
 	p.ctl.Lock()
 	next.eq.Set(p.eqBands)
+	next.fade.setHold(p.crossfade)
 	p.mu.Lock()
 	if p.session == nil || p.speed != speed {
 		p.mu.Unlock()
@@ -353,6 +357,38 @@ func (p *Player) SetEQ(gains []float64) {
 		p.next.eq.Set(p.eqBands)
 	}
 	p.mu.Unlock()
+}
+
+// MaxCrossfade is the longest crossfade SetCrossfade takes. The app opens the
+// next track twenty seconds ahead, and a fade can only start once it is open.
+const MaxCrossfade = 12 * time.Second
+
+// SetCrossfade sets how long the end of a track fades out while the start of
+// the next fades in, and zero turns it off. It is clamped to MaxCrossfade. A
+// fade only joins tracks that Preload has opened, and takes effect on the
+// stream playing and the one preloaded without restarting either; the stream
+// playing gives up the last part of its sound to the fade, so a change to a
+// longer fade applies fully from the next track.
+func (p *Player) SetCrossfade(d time.Duration) {
+	d = min(max(d, 0), MaxCrossfade)
+	p.ctl.Lock()
+	defer p.ctl.Unlock()
+	p.crossfade = d
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.session != nil {
+		p.session.fade.setHold(d)
+	}
+	if p.next != nil {
+		p.next.fade.setHold(d)
+	}
+}
+
+// Crossfade returns the crossfade length, zero when there is none.
+func (p *Player) Crossfade() time.Duration {
+	p.ctl.Lock()
+	defer p.ctl.Unlock()
+	return p.crossfade
 }
 
 // equalGains reports whether two band tables hold the same gains.
@@ -588,6 +624,7 @@ func (p *Player) start(ctx context.Context, url string, at time.Duration, paused
 		return err
 	}
 	s.paused = paused
+	s.fade.setHold(p.crossfade)
 	s.out = audioCtx.newPlayer(s.source)
 	p.mu.Lock()
 	s.out.SetVolume(p.volume)
@@ -623,7 +660,8 @@ func (p *Player) decode(ffmpeg, url string, at time.Duration, eq []float64, spee
 		url: url, cmd: cmd, pipe: pipe, stderr: stderr,
 		offset: at, speed: speed, done: make(chan struct{}), quit: make(chan struct{}), eq: newEqualizer(eq),
 	}
-	s.source = newCountingReader(newEQReader(pipe, s.eq), func() io.Reader { return p.handoff(s) })
+	s.fade = newFadeReader(newEQReader(pipe, s.eq), func() *session { return p.upcoming(s) })
+	s.source = newCountingReader(s.fade, func() io.Reader { return p.handoff(s) })
 	go p.reap(s)
 	return s, nil
 }
@@ -722,6 +760,33 @@ func (p *Player) handoff(from *session) io.Reader {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	next := p.upcomingLocked(from)
+	// A stream that was faded into must be the one that takes over; another
+	// preloaded since would start over from its beginning.
+	if next == nil || from.fade.mixing && from.fade.follower != nil && from.fade.follower != next {
+		return nil
+	}
+	next.out, next.paused = from.out, from.paused
+	p.session, p.next, p.advanced = next, nil, next.tag
+	return next.source
+}
+
+// upcoming is the preloaded stream that will follow from when it has ended
+// cleanly, or nil. The fade reads the start of it before the handover.
+func (p *Player) upcoming(from *session) *session {
+	select {
+	case <-from.done:
+	case <-from.quit:
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.upcomingLocked(from)
+}
+
+// upcomingLocked is upcoming for a caller that holds p.mu, and has waited for
+// from to finish.
+func (p *Player) upcomingLocked(from *session) *session {
 	next := p.next
 	if p.session != from || next == nil || from.waitErr != nil || from.stderr.String() != "" {
 		return nil
@@ -735,9 +800,7 @@ func (p *Player) handoff(from *session) io.Reader {
 		}
 	default:
 	}
-	next.out, next.paused = from.out, from.paused
-	p.session, p.next, p.advanced = next, nil, next.tag
-	return next.source
+	return next
 }
 
 // pendingSamples reports whether ffmpeg exited cleanly without the reader
@@ -936,6 +999,7 @@ type session struct {
 	stderr *boundedBuffer
 	source *countingReader
 	eq     *equalizer
+	fade   *fadeReader
 	out    output
 	done   chan struct{}
 	// quit is closed when the app stops the decode.
