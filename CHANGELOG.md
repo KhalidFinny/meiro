@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **The window buttons on Windows show in the light theme.** The minimise, maximise and close buttons were white on a light window when Windows was dark; they now follow the theme you chose.
 - **The tray mini player on Windows has rounded corners.** Its corners no longer show a dark square behind the panel.
 
 ## [0.4.15] - 2026-10-28
