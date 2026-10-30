@@ -202,7 +202,7 @@ func (a *app) setup() {
 	}
 	a.cacheSongsText = strconv.Itoa(a.settings.CacheSongs)
 	a.volume = a.settings.Volume
-	a.player.SetVolume(a.volume / 100)
+	a.player.SetVolume(playbackVolume(a.volume, 0, false, a.settings.LogVolume))
 	a.loadEQ()
 	a.applyCrossfade()
 	a.openAudioCache()

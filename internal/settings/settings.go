@@ -40,6 +40,9 @@ type Settings struct {
 	Zoom int `json:"zoom,omitempty"`
 	// Volume is the player's, from 0 to 100.
 	Volume float64 `json:"volume"`
+	// LogVolume makes the volume slider follow a logarithmic curve, with finer
+	// steps at low volumes. Off keeps the slider linear.
+	LogVolume bool `json:"logVolume,omitempty"`
 	// AutoPlay adds YouTube Music's generated queue after the selected tracks.
 	AutoPlay bool `json:"autoPlay"`
 	// NormalizeLoudness applies YouTube's per-track loudness correction when signed in.
