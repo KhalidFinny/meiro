@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Tracks can crossfade.** A new Playback section in Settings fades the end of a song out while the next one fades in. Choose 1 to 12 seconds, and turn it off to go back to gapless playback.
 - **Songs, albums and playlists can be downloaded to play offline.** Choose Download in a song's menu, or on an album or playlist page. The new Downloads page lists what you saved, and it plays without a network. Downloaded songs show a check beside their length. ([#242](https://github.com/elianiva/meiro/issues/242))
 
+### Changed
+
+- **The sign-in window opens on the Google sign-in page.** It used to open the YouTube Music home page, and you had to find its Sign in button.
+
 ### Fixed
 
 - **Large playlists load all their songs.** Songs beyond the first page no longer disappear when YouTube puts their next-page link on the song list.
