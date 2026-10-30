@@ -124,6 +124,11 @@ Meiro stays small on purpose. These things stay out of scope and will not be
 implemented. If you open a pull request that adds one of them, I will not
 accept it. Feel free to maintain a fork of your own if you want to add these
 features.
+[GroophyLifefor/meiro](https://github.com/GroophyLifefor/meiro) is a great
+example. They built SoundCloud, a sync server, MusicBrainz linking,
+recommendations and a listening history page, among many other things, on top
+of Meiro. It is not part of Meiro, but feel free to check it out if you want to
+see how these features can work.
 
 - **Video.** Music videos play as audio, with a badge on the artwork. Meiro
   shows no picture.
