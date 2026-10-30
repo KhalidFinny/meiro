@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.16] - 2026-10-30
+
 ### Added
 
 - **The volume slider can follow a logarithmic curve.** Turn on Logarithmic volume under Settings → Sound for finer steps at low volumes. It is off by default. ([#245](https://github.com/elianiva/meiro/issues/245))
