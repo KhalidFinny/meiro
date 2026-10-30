@@ -9,10 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **Tracks can crossfade.** A new Playback section in Settings fades the end of a song out while the next one fades in. Choose 1 to 12 seconds, and turn it off to go back to gapless playback.
-- **Songs, albums and playlists can be downloaded to play offline.** Choose Download in a song's menu, or on an album or playlist page. The new Downloads page lists what you saved, and it plays without a network. Downloaded songs show a check beside their length. ([#242](https://github.com/elianiva/meiro/issues/242))
+- **The notch closes automatically when you leave it.** Move the pointer away for two seconds to return to the compact player. Moving back cancels the countdown; dragging progress or keeping keyboard focus on a control holds the panel open.
+- **Open Now Playing from the notch cover.** Click the large artwork to bring Meiro forward on the current song and collapse the notch, preserving playback position and pause state.
+- **Follow artist and album names from the player.** In the main window's player bar and Now Playing, click a linked credit to open its page while music keeps playing. Each credited artist opens separately, and saved queues retain their links.
+- **Open Meiro from the notch.** The expanded panel has a small Open Meiro button beside collapse. It brings the main window forward and smoothly returns the notch to its compact size while playback continues.
+- **A notch player on macOS.** On a MacBook with a notch, the current cover and an animated playback indicator sit beside the camera. Click either side to open a compact, rounded panel with cover art, track information and synced lyrics side by side. Seek with its progress bar or use previous, play/pause and next without closing the panel. Turn it off in Settings > Desktop.
 
 ### Changed
 
+- **Smoother notch transitions on macOS.** The panel expands and contracts with a short fade, reverses smoothly when clicked again, and uses a simple fade with Reduce Motion enabled.
+- **Quieter playback on macOS.** Track information stays in the notch, without notification banners or a Meiro menu bar icon. Keep Meiro running when its window closes and reopen it from the Dock.
+- **Songs, albums and playlists can be downloaded to play offline.** Choose Download in a song's menu, or on an album or playlist page. The new Downloads page lists what you saved, and it plays without a network. Downloaded songs show a check beside their length. ([#242](https://github.com/elianiva/meiro/issues/242))
 - **The sign-in window opens on the Google sign-in page.** It used to open the YouTube Music home page, and you had to find its Sign in button.
 
 ### Fixed
@@ -21,6 +28,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **The window buttons on Windows show in the light theme.** The minimise, maximise and close buttons were white on a light window when Windows was dark; they now follow the theme you chose.
 - **The tray mini player on Windows has rounded corners.** Its corners no longer show a dark square behind the panel.
+- **Compact notch clicks respond reliably.** Clicking the cover or playback indicator opens the panel even when the mouse is held briefly or Meiro gains focus during the click.
+- **Reopen Meiro from the notch after closing its window.** On a notched Mac, the notch player keeps the main window available in the background by default. Open Meiro restores it and collapses the notch. Choosing to quit closes the notch as well, and explicit background preferences are respected.
+- **The macOS notch gives focus back to the menu bar.** The compact player no longer keeps keyboard focus, and clicking outside an expanded notch releases it without interrupting playback or the collapse animation.
+- **Album covers load when following a name from the player.** Albums using YouTube Music's newer page layout now show their own artwork instead of a music-note placeholder.
 
 ## [0.4.15] - 2026-10-28
 

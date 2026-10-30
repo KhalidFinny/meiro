@@ -36,7 +36,9 @@ type nowPlayingState struct {
 	open bool
 	// closing is set while the player sinks away, before open is cleared.
 	closing bool
-	tab     panelTab
+	// navigateTo is a metadata destination waiting for the close animation.
+	navigateTo *youtube.BylinePart
+	tab        panelTab
 	// playerShown says the player has been built, so its rise starts on its
 	// first frame only.
 	playerShown bool
@@ -85,6 +87,7 @@ type detailsState struct {
 
 // openPlayer opens the full-screen player on a tab.
 func (a *app) openPlayer(tab panelTab, queueOnly bool) {
+	a.nowPlaying.navigateTo = nil
 	a.nowPlaying.open, a.nowPlaying.closing = true, false
 	a.nowPlaying.tab, a.nowPlaying.queueOnly = tab, queueOnly
 	a.loadPanel()
@@ -101,6 +104,9 @@ func (a *app) setMiniShown(open bool) {
 // Opening the panel, choosing a tab and starting a track call it; building the
 // view never does.
 func (a *app) loadPanel() {
+	if a.notch.expanded {
+		a.loadLyrics()
+	}
 	if !a.nowPlaying.open && !a.nowPlaying.miniOpen {
 		return
 	}
@@ -200,6 +206,10 @@ func (a *app) nowPlayingView(c *ui.Context) {
 	// the player when its slide reaches the end.
 	if a.nowPlaying.closing && lift >= riseDistance-0.5 {
 		a.nowPlaying.open, a.nowPlaying.closing = false, false
+		if part := a.nowPlaying.navigateTo; part != nil {
+			a.nowPlaying.navigateTo = nil
+			a.openTarget(part.Target(), detail{title: part.Text})
+		}
 		return
 	}
 	panel.Children(func() {
@@ -234,7 +244,7 @@ func (a *app) nowPlayingView(c *ui.Context) {
 func (a *app) nowPlayingMain(c *ui.Context, windowHeight float32) {
 	controls := func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			a.trackLine(c, m3.HeadlineSmall, m3.TitleMedium).Grow(1)
+			a.trackLine(c, m3.HeadlineSmall, m3.TitleMedium, true).Grow(1)
 			a.likeButton(c)
 		})
 		a.scrubber(c)

@@ -126,6 +126,7 @@ type app struct {
 
 	playback
 	nowPlaying nowPlayingState
+	notch      notchState
 
 	// The local listening history and the stats page built from it.
 	historyPath    string
