@@ -74,6 +74,8 @@ type pageData struct {
 	// still rebuilds them.
 	rowsDirty bool
 	rowsKey   rowsKey
+	// downloads is the version of the downloads the Downloads page shows.
+	downloads int
 	// list is where the page is scrolled to, kept with it so that going back
 	// to a page shows it where it was left.
 	list *ui.ListState
@@ -216,6 +218,12 @@ func (a *app) loadPage(r *route, id string) {
 			log.Printf("loading the rest of %s: %v", path, err)
 			a.applyPage(p, r, path, client, result, false)
 			feed.more, feed.moreErr = "", ""
+			return
+		}
+		// Offline, a downloaded album or playlist shows what was downloaded
+		// of it.
+		if downloaded, ok := a.offlinePage(id); ok && r.isDetail() && errors.Is(err, youtube.ErrUnreachable) {
+			a.applyPage(p, r, path, client, downloaded, false)
 			return
 		}
 		if err != nil {
