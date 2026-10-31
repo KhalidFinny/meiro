@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **The macOS menu bar player returns when the notch is off or unavailable.** Turn off Notch player in Settings > Desktop to use the menu bar icon and mini player. When no display with a notch is available, Meiro switches to the menu bar automatically and returns to the notch when that display comes back. Playback continues, your notch preference is kept, and track notifications stay off.
 - **Playback explains when auto-skip reaches only disliked songs.** The player now tells you why it stopped instead of ending silently.
 - **Windows track notifications show the song's cover.** They showed Meiro's tray icon instead of the song's artwork.
 
