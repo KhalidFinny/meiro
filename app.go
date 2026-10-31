@@ -113,6 +113,8 @@ type app struct {
 	// are out, by what they change, so that one is not asked for twice.
 	writing  map[string]bool
 	menuOpen bool // the account menu
+	// speedMenu is the key of the speed button whose menu is open, or empty.
+	speedMenu string
 	// detailFilter narrows a playlist page to the songs that match. It is
 	// part of the page's rows key, so a change asks for the rows again.
 	// detailSearchOpen is whether the bar that types it is open.

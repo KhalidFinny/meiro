@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Playback speed is a setting now.** Settings → Playback has the speed for songs and for podcast episodes, each a menu of 0.5×–3×. No player surface shows a speed control, so the player bar is back to the transport, and the mini player's volume slider keeps the whole row.
+
 ## [0.5.1] - 2026-10-31
 
 ### Added

@@ -632,17 +632,21 @@ func (a *app) setVolume(v float64) {
 // playbackSpeeds are the speeds a track can play at.
 var playbackSpeeds = []float64{0.5, 0.8, 1, 1.2, 1.5, 1.8, 2, 2.5, 3}
 
-// speedFor is how fast item plays: an episode at the speed chosen for
-// podcasts, anything else at the one chosen for music.
-func (a *app) speedFor(item youtube.MusicItem) float64 {
-	speed := a.settings.MusicSpeed
-	if item.IsEpisode() {
-		speed = a.settings.PodcastSpeed
-	}
+// knownSpeed returns a speed from the list, or normal for one that is not.
+func knownSpeed(speed float64) float64 {
 	if slices.Contains(playbackSpeeds, speed) {
 		return speed
 	}
 	return 1
+}
+
+// speedFor is how fast item plays: an episode at the speed chosen for
+// podcasts, anything else at the one chosen for music.
+func (a *app) speedFor(item youtube.MusicItem) float64 {
+	if item.IsEpisode() {
+		return knownSpeed(a.settings.PodcastSpeed)
+	}
+	return knownSpeed(a.settings.MusicSpeed)
 }
 
 // applyCrossfade sends the crossfade length to the player, zero when it is off.
@@ -654,10 +658,10 @@ func (a *app) applyCrossfade() {
 	a.player.SetCrossfade(fade)
 }
 
-// setSpeed chooses how fast tracks like the current one play, podcast
-// episodes or music, keeps the choice, and plays the current track at it.
-func (a *app) setSpeed(speed float64) {
-	if a.current.IsEpisode() {
+// setSpeedFor keeps how fast podcast episodes or music play, and plays the
+// current track at the speed of its own kind.
+func (a *app) setSpeedFor(episode bool, speed float64) {
+	if episode {
 		a.settings.PodcastSpeed = speed
 	} else {
 		a.settings.MusicSpeed = speed

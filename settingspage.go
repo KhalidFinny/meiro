@@ -63,6 +63,7 @@ var settingsRows = []settingsRow{
 	{key: "h-playback", heading: "Playback"},
 	{key: "playback", search: "auto skip disliked songs thumbs down", card: (*app).playbackCard},
 	{key: "crossfade", search: "crossfade fade transition gap between tracks songs seconds", card: (*app).crossfadeCard},
+	{key: "speed", search: "playback speed rate faster slower podcast episode songs 0.5x 1.5x 2x", card: (*app).speedCard},
 
 	{key: "h-system", heading: "System"},
 	{key: "desktop", search: "desktop linux notifications discord rich presence activity status tray icon wordmark o mark low key subtle notch macbook lyrics", card: (*app).desktopCard},

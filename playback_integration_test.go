@@ -1014,9 +1014,9 @@ func TestAPodcastEpisodeComesBackWhereItStopped(t *testing.T) {
 	}
 }
 
-// An episode plays at the speed chosen from the player bar, and goes on at it
-// from where it was. Music keeps a speed of its own, chosen the same way, and
-// the next episode plays at the speed chosen for podcasts.
+// An episode plays at the speed chosen in settings, and goes on at it from
+// where it was. Music keeps a speed of its own, chosen the same way, and the
+// next episode plays at the speed chosen for podcasts.
 func TestEpisodesAndMusicPlayAtTheirOwnChosenSpeeds(t *testing.T) {
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
@@ -1041,21 +1041,25 @@ func TestEpisodesAndMusicPlayAtTheirOwnChosenSpeeds(t *testing.T) {
 	waitFor(t, playing("ep-1"))
 	a.player.Seek(70 * time.Second)
 	waitFor(t, func() bool { return a.player.Position() >= 70*time.Second })
-	tt.Frame()
-	if err := tt.Click("1×"); err != nil {
-		t.Fatalf("no speed button for an episode: %v in %q", err, tt.Texts())
+	// The speeds are settings, so they are picked on the settings page, in a
+	// window tall enough to show its cards.
+	a.router.Push("/settings")
+	st := ui.NewTester(a.view, 1000, 2600)
+	st.Frame()
+	if err := st.Click("Podcast episodes speed: 1×"); err != nil {
+		t.Fatalf("no podcast speed button: %v in %q", err, st.Texts())
 	}
-	tt.Frame()
-	if err := tt.Click("2×"); err != nil {
-		t.Fatalf("no 2× in the speed menu: %v in %q", err, tt.Texts())
+	st.Frame()
+	if err := st.Click("2×"); err != nil {
+		t.Fatalf("no 2× in the podcast speed menu: %v in %q", err, st.Texts())
 	}
 	waitFor(t, func() bool { a.poll(); return a.player.Speed() == 2 && a.player.Playing() })
 	if a.current.VideoID != "ep-1" || a.player.Position() < 70*time.Second {
 		t.Errorf("after the change %s plays at %v, want ep-1 from 70s or past it", a.current.VideoID, a.player.Position())
 	}
-	tt.Frame()
-	if !tt.HasText("2×") || a.settings.PodcastSpeed != 2 {
-		t.Errorf("the button reads %q and the setting is %v, want 2×", tt.Texts(), a.settings.PodcastSpeed)
+	st.Frame()
+	if !st.HasText("Podcast episodes speed: 2×") || a.settings.PodcastSpeed != 2 {
+		t.Errorf("the button shows %q and the setting is %v, want 2×", st.Texts(), a.settings.PodcastSpeed)
 	}
 
 	a.play(tracks("song")[0], nil)
@@ -1063,19 +1067,21 @@ func TestEpisodesAndMusicPlayAtTheirOwnChosenSpeeds(t *testing.T) {
 	if got := a.player.Speed(); got != 1 {
 		t.Errorf("a song plays at %v×, want its own pace until music has a speed", got)
 	}
-	tt.Frame()
-	if err := tt.Click("1×"); err != nil {
-		t.Fatalf("no speed button for a song: %v in %q", err, tt.Texts())
+	st.Frame()
+	if err := st.Click("Songs speed: 1×"); err != nil {
+		t.Fatalf("no song speed button: %v in %q", err, st.Texts())
 	}
-	tt.Frame()
-	if err := tt.Click("1.5×"); err != nil {
-		t.Fatalf("no 1.5× in the speed menu: %v in %q", err, tt.Texts())
+	st.Frame()
+	if err := st.Click("1.5×"); err != nil {
+		t.Fatalf("no 1.5× in the song speed menu: %v in %q", err, st.Texts())
 	}
 	waitFor(t, func() bool { a.poll(); return a.player.Speed() == 1.5 && a.player.Playing() })
 	if a.settings.MusicSpeed != 1.5 || a.settings.PodcastSpeed != 2 {
 		t.Errorf("music speed %v and podcast speed %v, want 1.5 and the 2 kept", a.settings.MusicSpeed, a.settings.PodcastSpeed)
 	}
 
+	a.router.Push("/podcast/MPSPPLshow")
+	tt.Frame()
 	if err := tt.Click("Episode Two"); err != nil {
 		t.Fatal(err)
 	}

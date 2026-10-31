@@ -8,6 +8,7 @@ A user changes the theme and equaliser, rebinds shortcuts, clears history, opens
 - `settings-hot-reload` writes `settings.json` while the app runs and sees the new theme and playback settings apply without a restart.
 - `settings-persist` writes `settings.json` and reads it back.
 - `settings-skip-disliked` toggles auto-skip under Playback; it is off by default and only skips known dislikes.
+- `settings-speed` picks how fast songs and podcast episodes play under Playback, each from its own menu of 0.5×–3×; no player surface shows a speed control, and the setting survives a restart.
 - `settings-eq` toggles `Equaliser on`, picks a preset, and changes slider gains live without restarting the current stream.
 - `settings-shortcuts` shows, records, conflicts and resets shortcuts, and runs the defaults.
 - `keyboard-navigation` covers Tab and Shift+Tab through row and card actions, menu arrows/Home/End/Escape, Shift+F10 context menus, player tabs, queue selection/activation, and keyboard sliders.
