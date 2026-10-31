@@ -239,6 +239,28 @@ func TestSettingsFileChangesLeaveAPendingAppWriteAlone(t *testing.T) {
 	a.saver.Wait()
 }
 
+func TestAutoSkipDislikedSettingPersists(t *testing.T) {
+	a := newTestApp(t)
+	a.saver.Path = filepath.Join(t.TempDir(), "settings.json")
+	a.router.Push("/settings")
+	tt := ui.NewTester(a.view, 1000, 700)
+	if err := tt.Click("Search settings"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("auto skip disliked")
+	tt.Frame()
+	if a.settings.AutoSkipDisliked {
+		t.Fatal("auto-skip should be off by default")
+	}
+	if err := tt.Click("Skip disliked songs"); err != nil {
+		t.Fatal(err)
+	}
+	a.saver.Wait()
+	if !settings.Load(a.saver.Path).AutoSkipDisliked {
+		t.Fatal("auto-skip was not saved")
+	}
+}
+
 func writeSettingsFile(t *testing.T, path string, s settings.Settings) {
 	t.Helper()
 	data, err := json.MarshalIndent(s, "", "  ")

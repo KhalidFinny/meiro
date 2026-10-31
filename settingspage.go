@@ -61,6 +61,7 @@ var settingsRows = []settingsRow{
 	{key: "sound", search: "sound audio normalize loudness logarithmic equaliser volume", card: (*app).soundCard},
 
 	{key: "h-playback", heading: "Playback"},
+	{key: "playback", search: "auto skip disliked songs thumbs down", card: (*app).playbackCard},
 	{key: "crossfade", search: "crossfade fade transition gap between tracks songs seconds", card: (*app).crossfadeCard},
 
 	{key: "h-system", heading: "System"},
@@ -415,6 +416,19 @@ func (a *app) soundCard(c *ui.Context) {
 					}
 					m3.Text(c, m3.LabelLarge, eqLabels[i]).TextColor(sc.OnSurfaceVariant)
 				})
+			}
+		})
+	})
+}
+
+func (a *app) playbackCard(c *ui.Context) {
+	a.settingsCard(c, "Disliked songs", m3.IconMusicNote, func() {
+		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+			settingLabel(c, "Auto-skip disliked songs", "Only songs known to be disliked are skipped.").Grow(1)
+			on := a.settings.AutoSkipDisliked
+			if m3.Switch(c, &on, "Skip disliked songs").Changed() {
+				a.settings.AutoSkipDisliked = on
+				a.saveSettings()
 			}
 		})
 	})

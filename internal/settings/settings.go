@@ -48,6 +48,8 @@ type Settings struct {
 	LogVolume bool `json:"logVolume,omitempty"`
 	// AutoPlay adds YouTube Music's generated queue after the selected tracks.
 	AutoPlay bool `json:"autoPlay"`
+	// AutoSkipDisliked skips tracks known to have a thumbs-down.
+	AutoSkipDisliked bool `json:"autoSkipDisliked,omitempty"`
 	// NormalizeLoudness applies YouTube's per-track loudness correction when signed in.
 	NormalizeLoudness bool `json:"normalizeLoudness"`
 	// CacheSongs is how many recently played audio files to keep on disk.

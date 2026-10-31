@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Dislike songs.** Use the player or a song's menu to dislike it, and optionally skip songs known to be disliked in Settings → Playback.
 - **Meiro can use matugen's full colour set.** Matugen writes light and dark colours to `colors.json` in Meiro's data folder, and Meiro matches the rest of your desktop exactly without touching `settings.json`. Choose Matugen as the colour source in Settings → Appearance; the README has the template and setup. ([#249](https://github.com/elianiva/meiro/issues/249))
 - **Media keys on Windows.** Play, pause, next track, previous track and stop keys control playback from the keyboard, even when Meiro is in the background.
 
@@ -17,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Playback explains when auto-skip reaches only disliked songs.** The player now tells you why it stopped instead of ending silently.
 - **Windows track notifications show the song's cover.** They showed Meiro's tray icon instead of the song's artwork.
 
 ### Removed
