@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-31
+
 ### Added
 
 - **Dislike songs.** Use the player or a song's menu to dislike it, and optionally skip songs known to be disliked in Settings → Playback.
